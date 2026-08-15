@@ -23,6 +23,7 @@ class _UnlockKeysScreenState extends State<UnlockKeysScreen> {
   bool busy = false;
 
   Future<void> _import() async {
+    final auth = context.read<AuthController>();
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['txt'],
@@ -39,7 +40,7 @@ class _UnlockKeysScreenState extends State<UnlockKeysScreen> {
     });
     try {
       final keys = parseKeyFile(text);
-      await context.read<AuthController>().importKeys(keys);
+      await auth.importKeys(keys);
     } on ApiException catch (e) {
       setState(() => importError = e.message);
     } catch (e) {

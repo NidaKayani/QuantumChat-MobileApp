@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../crypto/key_storage.dart';
-import 'qc_theme.dart';
+import '../theme/qc_theme.dart';
 
 class ThemeController extends ChangeNotifier {
   ThemeController(this.storage);
