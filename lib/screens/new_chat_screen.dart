@@ -5,7 +5,6 @@ import '../models/models.dart';
 import '../state/auth_controller.dart';
 import '../state/chat_controller.dart';
 import '../state/theme_controller.dart';
-import '../theme/qc_theme.dart';
 import '../widgets/common.dart';
 import 'thread_screen.dart';
 

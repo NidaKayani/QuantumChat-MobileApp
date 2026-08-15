@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 
-import 'package:pinenacl/api.dart';
 import 'package:pinenacl/x25519.dart';
 
 const keySetSize = 5;
@@ -57,7 +55,7 @@ String toHex(Uint8List bytes) {
 Uint8List fromHex(String hex) {
   final clean = hex.trim().toLowerCase();
   if (clean.length.isOdd) {
-    throw FormatException('Odd-length hex string');
+    throw const FormatException('Odd-length hex string');
   }
   final out = Uint8List(clean.length ~/ 2);
   for (var i = 0; i < out.length; i++) {

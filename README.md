@@ -83,3 +83,8 @@ lib/
   screens/                  # landing, auth, inbox, thread, settings
   theme/                    # QuantumChat navy / light / eyecare
 ```
+1) how to run mobile app
+cd D:\QuantumLogics\QuantumChat\mobileApp
+flutter emulators --launch Pixel_7
+
+
