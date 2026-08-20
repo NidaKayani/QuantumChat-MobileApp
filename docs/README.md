@@ -8,5 +8,6 @@ GitHub Community Standards for this repository live here:
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 | [SECURITY.md](SECURITY.md) | Vulnerability reporting |
 | [BUILD.md](BUILD.md) | Android / iOS build setup and known issues |
+| [HOW_TO_DOWNLOAD_FLUTTER.md](HOW_TO_DOWNLOAD_FLUTTER.md) | Installing the Flutter SDK |
 
 License: [MIT](../LICENSE).
