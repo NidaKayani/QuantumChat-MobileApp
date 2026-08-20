@@ -6,8 +6,8 @@ plugins {
 
 android {
     namespace = "labs.quantumlogics.quantumchat"
-    compileSdk = 35
-    ndkVersion = flutter.ndkVersion
+    compileSdk = 37
+    buildToolsVersion = "36.0.0"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

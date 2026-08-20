@@ -51,3 +51,6 @@ ios/.symlinks/
 .env.local
 *.lock
 !pubspec.lock
+
+.local-sdk/
+
