@@ -38,12 +38,19 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
     final chat = context.watch<ChatController>();
     final auth = context.watch<AuthController>();
     final colors = context.watch<ThemeController>().colors;
-    const filters = [
-      ('all', 'All'),
-      ('unread', 'Unread'),
-      ('groups', 'Groups'),
-      ('friends', 'Friends'),
-    ];
+    final filters = chat.incomingRequestCount > 0
+        ? [
+            ('all', 'All'),
+            ('friends', 'Friends'),
+            ('unread', 'Unread'),
+            ('groups', 'Groups'),
+          ]
+        : [
+            ('all', 'All'),
+            ('unread', 'Unread'),
+            ('groups', 'Groups'),
+            ('friends', 'Friends'),
+          ];
 
     return Scaffold(
       appBar: AppBar(
@@ -124,25 +131,37 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
             ),
           ),
           SizedBox(
-            height: 40,
+            height: 48,
             child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 12),
               children: filters.map((f) {
                 final selected = chat.filter == f.$1;
+                final requestCount = f.$1 == 'friends' ? chat.incomingRequestCount : 0;
                 return Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: ChoiceChip(
-                    label: Text(f.$2),
-                    selected: selected,
-                    onSelected: (_) => chat.setFilter(f.$1),
-                    selectedColor: colors.accent,
-                    labelStyle: TextStyle(
-                      color: selected ? Colors.white : colors.textSecondary,
-                      fontWeight: FontWeight.w600,
+                  child: Badge(
+                    isLabelVisible: requestCount > 0,
+                    label: Text(requestCount > 9 ? '9+' : '$requestCount'),
+                    backgroundColor: const Color(0xFFE11D48),
+                    child: ChoiceChip(
+                      label: Text(f.$2),
+                      selected: selected,
+                      onSelected: (_) => chat.setFilter(f.$1),
+                      selectedColor: colors.accent,
+                      labelStyle: TextStyle(
+                        color: selected ? Colors.white : colors.textSecondary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      backgroundColor: requestCount > 0 && !selected
+                          ? const Color(0x33E11D48)
+                          : colors.elevated,
+                      side: BorderSide(
+                        color: requestCount > 0 && !selected
+                            ? const Color(0xFFE11D48)
+                            : (selected ? colors.accent : colors.border),
+                      ),
                     ),
-                    backgroundColor: colors.elevated,
-                    side: BorderSide(color: selected ? colors.accent : colors.border),
                   ),
                 );
               }).toList(),
