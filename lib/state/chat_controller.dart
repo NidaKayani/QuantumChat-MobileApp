@@ -30,6 +30,7 @@ class ChatController extends ChangeNotifier {
   String? threadError;
   String? typingFrom;
   final Set<String> onlineUserIds = {};
+  int incomingRequestCount = 0;
   Timer? _typingDebounce;
   Timer? _pollTimer;
   String? _joinedGroupId;
@@ -61,6 +62,8 @@ class ChatController extends ChangeNotifier {
     socket.off('presence:update');
     socket.off('typing:start');
     socket.off('typing:stop');
+    socket.off('friend:request:new');
+    socket.off('friend:request:accepted');
   }
 
   void _bindSocket() {
@@ -129,6 +132,20 @@ class ChatController extends ChangeNotifier {
         notifyListeners();
       }
     });
+    socket.on('friend:request:new', (_) {
+      unawaited(_refreshFriendRequests());
+    });
+    socket.on('friend:request:accepted', (_) {
+      unawaited(refreshInbox());
+    });
+  }
+
+  Future<void> _refreshFriendRequests() async {
+    try {
+      final incoming = await auth.api.friendRequests();
+      incomingRequestCount = incoming.length;
+      notifyListeners();
+    } catch (_) {}
   }
 
   Future<void> refreshInbox() async {
@@ -143,6 +160,7 @@ class ChatController extends ChangeNotifier {
       } catch (_) {
         friends = [];
       }
+      await _refreshFriendRequests();
       _rebuildConversations();
     } on ApiException catch (e) {
       threadError = e.message;
@@ -533,6 +551,7 @@ class ChatController extends ChangeNotifier {
         await _noteActivity(row);
       }
       _rebuildConversations();
+      await _refreshFriendRequests();
       if (selected != null && rows.isNotEmpty) {
         await open(selected!);
       }
