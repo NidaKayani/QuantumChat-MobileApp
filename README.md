@@ -34,33 +34,11 @@ That fills in Gradle / Xcode scaffolding without replacing `lib/`.
 ```bash
 cd mobileApp
 flutter pub get
-```
-
-**Android emulator** (backend on the host machine):
-
-```bash
 flutter run
 ```
 
-The default API URL is `http://10.0.2.2:5000`. Change it in Settings → Server if needed.
-
-**iOS simulator**:
-
-```bash
-flutter run
-```
-
-Default API URL is `http://localhost:5000`.
-
-**Physical device** — set the API URL in Settings to your computer's LAN address, e.g. `http://192.168.1.20:5000`, and make sure the backend CORS allowlist includes that origin (native apps usually send no `Origin`, which the backend already allows).
-
-**Production backend**:
-
-```bash
-flutter run --dart-define=API_URL=https://quantum-chat-backend.vercel.app
-```
-
-Note: Vercel hosting has no Socket.IO; the app falls back to REST polling.
+See [docs/RUN.md](docs/RUN.md) for emulator/simulator/device specifics, API URL configuration
+(`10.0.2.2` vs `localhost` vs LAN IP), and running against the production backend.
 
 ## Encryption (same as web)
 
@@ -83,8 +61,8 @@ lib/
   screens/                  # landing, auth, inbox, thread, settings
   theme/                    # QuantumChat navy / light / eyecare
 ```
-1) how to run mobile app
-cd D:\QuantumLogics\QuantumChat\mobileApp
-flutter emulators --launch Pixel_7
 
+## More docs
+
+See [docs/](docs/) for contributing guidelines, build setup, and the Flutter SDK install guide.
 
