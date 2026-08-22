@@ -1,4 +1,6 @@
-import 'dart:io';
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 /// QuantumChat API origin (no trailing slash, no `/api` suffix).
 /// Override at build time: `--dart-define=API_URL=https://your-api.example`
@@ -10,7 +12,7 @@ class AppConfig {
   /// Android emulator reaches the host machine at 10.0.2.2.
   static String get defaultApiBase {
     if (_defined.isNotEmpty) return _defined.replaceAll(RegExp(r'/$'), '');
-    if (Platform.isAndroid) return 'http://10.0.2.2:5000';
+    if (!kIsWeb && Platform.isAndroid) return 'http://10.0.2.2:5000';
     return 'http://localhost:5000';
   }
 
@@ -22,11 +24,13 @@ class AppConfig {
   }
 
   static String deviceLabel() {
-    final os = Platform.isIOS
-        ? 'iOS'
-        : Platform.isAndroid
-            ? 'Android'
-            : Platform.operatingSystem;
+    final os = kIsWeb
+        ? 'Web'
+        : Platform.isIOS
+            ? 'iOS'
+            : Platform.isAndroid
+                ? 'Android'
+                : Platform.operatingSystem;
     final label = 'QuantumChat $os';
     return label.length <= 120 ? label : label.substring(0, 120);
   }
