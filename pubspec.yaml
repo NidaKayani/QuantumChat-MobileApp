@@ -1,3 +1,13 @@
+# This is the pubspec.yaml file for the mobile app.
+# It is used to manage the dependencies and plugins for the app.
+# It is also used to define the version and environment of the app.
+# It is also used to define the assets for the app.
+# It is also used to define the plugins for the app.
+# It is also used to define the dependencies for the app.
+# It is also used to define the dev dependencies for the app.
+# It is also used to define the flutter for the app.
+# It is also used to define the assets for the app.
+
 name: quantumchat
 description: QuantumChat mobile messenger — same E2E backend as the web app.
 publish_to: "none"
