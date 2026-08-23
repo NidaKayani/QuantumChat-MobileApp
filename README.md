@@ -50,6 +50,19 @@ See [docs/RUN.md](docs/RUN.md) for emulator/simulator/device specifics, API URL 
 
 ## Project layout
 
+This repo targets **Android and iOS only** (no web, Windows, macOS, or Linux folders).
+
+```
+mobileApp/
+  lib/          ← app screens and logic (where you work)
+  android/      ← Android build wrapper (needed to install on phone/emulator)
+  ios/          ← iPhone build wrapper (for future iOS builds)
+  assets/       ← images and bundled files
+  test/         ← automated tests
+  pubspec.yaml  ← app name, version, and package list
+  docs/         ← run/build/contributing guides
+```
+
 ```
 lib/
   main.dart                 # storage, auth, theme bootstrap
@@ -60,7 +73,10 @@ lib/
   state/                    # AuthController, ChatController, ThemeController
   screens/                  # landing, auth, inbox, thread, settings
   theme/                    # QuantumChat navy / light / eyecare
+  widgets/                  # shared UI pieces
 ```
+
+Temporary folders (`build/`, `.dart_tool/`) are recreated by Flutter — safe to delete with `flutter clean`.
 
 ## More docs
 
