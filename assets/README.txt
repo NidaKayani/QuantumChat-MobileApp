@@ -1,14 +1,5 @@
-# Placeholder so the assets directory is tracked.
-# Brand mark is drawn in-app by BrandLogo.
+Brand assets.
 
-4. What is assets/?
-
-This is where you can keep things like:
-
-assets/
-├── logo.png
-├── icons/
-├── images/
-└── fonts/
-
-For example, if QuantumChat has a logo, it might be stored here.
+logo.png is the same QuantumChat mark used on the website
+(frontend/public/logo.png). It is shown in-app by BrandLogo and used
+to generate Android / iOS launcher icons.
