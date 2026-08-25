@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "labs.quantumlogics.quantumchat"
-    compileSdk = 37
+    compileSdk = 36
     buildToolsVersion = "36.0.0"
 
     compileOptions {
