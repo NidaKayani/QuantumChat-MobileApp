@@ -96,6 +96,31 @@ SealedEnvelope sealMessage(String plaintext, String targetPublicKeyHex) {
 }
 
 SealedEnvelope sealBytes(Uint8List bytes, String targetPublicKeyHex) {
+  final sealed = sealFileBytes(bytes, targetPublicKeyHex);
+  return SealedEnvelope(
+    ciphertext: base64Encode(sealed.cipherBytes),
+    nonce: sealed.nonce,
+    ephemeralPublicKey: sealed.ephemeralPublicKey,
+    targetPublicKey: sealed.targetPublicKey,
+  );
+}
+
+/// Raw-byte seal for attachments (matches website `sealBytes` in keys.js).
+class SealedFileBytes {
+  const SealedFileBytes({
+    required this.cipherBytes,
+    required this.nonce,
+    required this.ephemeralPublicKey,
+    required this.targetPublicKey,
+  });
+
+  final Uint8List cipherBytes;
+  final String nonce;
+  final String ephemeralPublicKey;
+  final String targetPublicKey;
+}
+
+SealedFileBytes sealFileBytes(Uint8List bytes, String targetPublicKeyHex) {
   final ephemeral = PrivateKey.generate();
   final box = Box(
     myPrivateKey: ephemeral,
@@ -103,12 +128,69 @@ SealedEnvelope sealBytes(Uint8List bytes, String targetPublicKeyHex) {
   );
   final nonce = Uint8List.fromList(List<int>.generate(24, (_) => Random.secure().nextInt(256)));
   final encrypted = box.encrypt(bytes, nonce: nonce);
-  return SealedEnvelope(
-    ciphertext: base64Encode(Uint8List.fromList(encrypted.cipherText)),
+  return SealedFileBytes(
+    cipherBytes: Uint8List.fromList(encrypted.cipherText),
     nonce: base64Encode(Uint8List.fromList(encrypted.nonce)),
     ephemeralPublicKey: toHex(Uint8List.fromList(ephemeral.publicKey)),
     targetPublicKey: targetPublicKeyHex.toLowerCase(),
   );
+}
+
+Uint8List? unsealFileBytes(
+  Uint8List cipherBytes, {
+  required String nonce,
+  required String ephemeralPublicKey,
+  required String myPrivateKeyHex,
+}) {
+  try {
+    final box = Box(
+      myPrivateKey: PrivateKey(fromHex(myPrivateKeyHex)),
+      theirPublicKey: PublicKey(fromHex(ephemeralPublicKey)),
+    );
+    final opened = box.decrypt(EncryptedMessage(
+      cipherText: cipherBytes,
+      nonce: base64Decode(nonce),
+    ));
+    return Uint8List.fromList(opened);
+  } catch (_) {
+    return null;
+  }
+}
+
+class SecretBoxSealed {
+  const SecretBoxSealed({
+    required this.cipherBytes,
+    required this.nonce,
+    required this.key,
+  });
+
+  final Uint8List cipherBytes;
+  final String nonce;
+  final String key;
+}
+
+SecretBoxSealed secretboxSeal(Uint8List bytes) {
+  final key = PineNaClUtils.randombytes(SecretBox.keyLength);
+  final box = SecretBox(key);
+  final encrypted = box.encrypt(bytes);
+  return SecretBoxSealed(
+    cipherBytes: Uint8List.fromList(encrypted.cipherText),
+    nonce: base64Encode(Uint8List.fromList(encrypted.nonce)),
+    key: base64Encode(Uint8List.fromList(key)),
+  );
+}
+
+Uint8List? secretboxOpen(Uint8List cipherBytes, String nonceB64, String keyB64) {
+  try {
+    final box = SecretBox(base64Decode(keyB64));
+    final opened = box.decrypt(EncryptedMessage(
+      cipherText: cipherBytes,
+      nonce: base64Decode(nonceB64),
+    ));
+    return Uint8List.fromList(opened);
+  } catch (_) {
+    return null;
+  }
 }
 
 String? unsealMessage(SealedEnvelope envelope, String myPrivateKeyHex) {

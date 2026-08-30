@@ -1,5 +1,7 @@
 Brand assets.
 
-logo.png is the same QuantumChat mark used on the website
-(frontend/public/logo.png). It is shown in-app by BrandLogo and used
-to generate Android / iOS launcher icons.
+logo.png — default QuantumChat mark (same as website /logo.png).
+
+icons/ — app-icon color variants matching the website Appearance picker:
+  original, emerald, violet, sunset, rose, crimson, gold, lime,
+  mono-dark, mono-light, cyber.
