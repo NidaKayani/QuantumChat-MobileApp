@@ -208,6 +208,18 @@ class ApiClient {
     return data.map((e) => QcUser.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  Future<List<FriendRequest>> friendRequestsIncoming() async {
+    final body = await get('/users/friend-requests');
+    final data = body['data'];
+    List<dynamic> list = [];
+    if (data is List) {
+      list = data;
+    } else if (data is Map) {
+      list = data['incoming'] as List<dynamic>? ?? [];
+    }
+    return list.map((e) => FriendRequest.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+  }
+
   Future<List<Map<String, dynamic>>> friendRequests() async {
     final body = await get('/users/friend-requests');
     final data = body['data'];
@@ -248,12 +260,70 @@ class ApiClient {
   Future<void> blockUser(String id) async => post('/users/$id/block');
   Future<void> unblockUser(String id) async => delete('/users/$id/block');
 
+  Future<QcUser> muteChat({String? peerId, String? groupId, String duration = 'always'}) async {
+    final body = await post('/users/me/mute', {
+      if (peerId != null) 'peerId': peerId,
+      if (groupId != null) 'groupId': groupId,
+      'duration': duration,
+    });
+    return QcUser.fromJson(body['data'] as Map<String, dynamic>);
+  }
+
+  Future<QcUser> unmuteChat({String? peerId, String? groupId}) async {
+    final body = await post('/users/me/unmute', {
+      if (peerId != null) 'peerId': peerId,
+      if (groupId != null) 'groupId': groupId,
+    });
+    return QcUser.fromJson(body['data'] as Map<String, dynamic>);
+  }
+
+  Future<void> clearChat({String? peerId, String? groupId}) async {
+    await post('/users/me/clear-chat', {
+      if (peerId != null) 'peerId': peerId,
+      if (groupId != null) 'groupId': groupId,
+    });
+  }
+
+  Future<QcUser> uploadAvatar(Uint8List bytes, {String filename = 'avatar.jpg', String mime = 'image/jpeg'}) async {
+    final request = http.MultipartRequest('POST', _uri('/users/me/avatar'));
+    request.headers.addAll(_headers(json: false));
+    request.files.add(http.MultipartFile.fromBytes('avatar', bytes, filename: filename));
+    final streamed = await request.send();
+    final res = await http.Response.fromStream(streamed);
+    final body = _decode(res);
+    return QcUser.fromJson(body['data'] as Map<String, dynamic>);
+  }
+
+  Future<void> deleteAvatar() async => delete('/users/me/avatar');
+
+  Future<Map<String, dynamic>> setup2fa() async {
+    final body = await post('/auth/2fa/setup');
+    return (body['data'] as Map<String, dynamic>?) ?? {};
+  }
+
+  Future<QcUser> enable2fa(String token) async {
+    final body = await post('/auth/2fa/enable', {'token': token});
+    final data = body['data'] as Map<String, dynamic>;
+    return QcUser.fromJson(data['user'] as Map<String, dynamic>);
+  }
+
+  Future<QcUser> disable2fa({required String password, required String token}) async {
+    final body = await post('/auth/2fa/disable', {'password': password, 'token': token});
+    final data = body['data'] as Map<String, dynamic>;
+    return QcUser.fromJson(data['user'] as Map<String, dynamic>);
+  }
+
   Future<List<QcGroup>> listGroups({String q = ''}) async {
     final query = <String, String>{'limit': '50'};
     if (q.isNotEmpty) query['q'] = q;
     final body = await get('/groups', query: query);
     final data = body['data'] as List<dynamic>? ?? [];
     return data.map((e) => QcGroup.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<QcGroup> getGroup(String id) async {
+    final body = await get('/groups/$id');
+    return QcGroup.fromJson(body['data'] as Map<String, dynamic>);
   }
 
   Future<QcGroup> createGroup({
@@ -267,6 +337,26 @@ class ApiClient {
       'memberIds': memberIds,
     });
     return QcGroup.fromJson(body['data'] as Map<String, dynamic>);
+  }
+
+  Future<QcGroup> addGroupMembers(String groupId, List<String> memberIds) async {
+    final body = await post('/groups/$groupId/members', {'memberIds': memberIds});
+    return QcGroup.fromJson(body['data'] as Map<String, dynamic>);
+  }
+
+  Future<QcGroup?> removeGroupMember(String groupId, String memberId) async {
+    final body = await delete('/groups/$groupId/members/$memberId');
+    final data = body['data'];
+    if (data is Map && data['deleted'] == true) return null;
+    return QcGroup.fromJson(Map<String, dynamic>.from(data as Map));
+  }
+
+  Future<void> leaveGroup(String groupId, String myId) async {
+    await delete('/groups/$groupId/members/$myId');
+  }
+
+  Future<void> deleteGroup(String groupId) async {
+    await delete('/groups/$groupId');
   }
 
   Future<List<Map<String, dynamic>>> getConversation(String userId, {String? before}) async {
@@ -287,12 +377,13 @@ class ApiClient {
   }
 
   Future<void> deleteMessage(String id, {bool forEveryone = false}) async {
-    await http.delete(
+    final res = await http.delete(
       _uri('/messages/$id').replace(queryParameters: {
         if (forEveryone) 'forEveryone': 'true',
       }),
       headers: _headers(),
     );
+    _decode(res);
   }
 
   Future<void> markRead(String userId) async {
@@ -323,29 +414,112 @@ class ApiClient {
     return (body['data'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
   }
 
-  Future<Map<String, dynamic>> uploadSealedAttachment({
-    required Uint8List cipherBytes,
+  Future<List<Map<String, dynamic>>> searchGifs(String q) async {
+    final body = await get('/gifs/search', query: {'q': q});
+    final data = body['data'];
+    if (data is List) return data.cast<Map<String, dynamic>>();
+    if (data is Map && data['results'] is List) {
+      return (data['results'] as List).cast<Map<String, dynamic>>();
+    }
+    return [];
+  }
+
+  Future<List<StoryItem>> listStories() async {
+    final body = await get('/stories');
+    final data = body['data'] as List<dynamic>? ?? [];
+    return data.map((e) => StoryItem.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+  }
+
+  Future<StoryItem> createStory({
+    required Uint8List bytes,
     required String filename,
-    required String recipientId,
-    required SealedEnvelope envelope,
-    required String mimetype,
+    String mimetype = 'image/jpeg',
+    String mediaType = 'image',
   }) async {
-    final request = http.MultipartRequest('POST', _uri('/attachments'));
+    final request = http.MultipartRequest('POST', _uri('/stories'));
     request.headers.addAll(_headers(json: false));
-    request.fields['recipientId'] = recipientId;
-    request.fields['nonce'] = envelope.nonce;
-    request.fields['ephemeralPublicKey'] = envelope.ephemeralPublicKey;
-    request.fields['targetPublicKey'] = envelope.targetPublicKey;
-    request.files.add(http.MultipartFile.fromBytes(
-      'file',
-      cipherBytes,
-      filename: filename,
-    ));
+    request.fields['sealed'] = 'false';
+    request.fields['mediaType'] = mediaType;
+    request.fields['mimetype'] = mimetype;
+    request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
     final streamed = await request.send();
     final res = await http.Response.fromStream(streamed);
     final body = _decode(res);
-    return body['data'] as Map<String, dynamic>;
+    return StoryItem.fromJson(body['data'] as Map<String, dynamic>);
   }
+
+  Future<Uint8List?> getStoryMedia(String id) async => getBytes('/stories/$id/media');
+
+  Future<void> markStoryViewed(String id) async => post('/stories/$id/view');
+
+  Future<void> deleteStory(String id) async => delete('/stories/$id');
+
+  /// Init → put bytes → finalize (website-compatible attachment upload).
+  Future<Map<String, dynamic>> uploadDmAttachment({
+    required String recipientId,
+    required String filename,
+    required String mimetype,
+    required SealedFileBytes forRecipient,
+    required SealedFileBytes forSender,
+  }) async {
+    final init = await post('/attachments/init', {
+      'recipientId': recipientId,
+      'filename': filename,
+      'mimetype': mimetype,
+      'size': forRecipient.cipherBytes.length,
+      'nonce': forRecipient.nonce,
+      'ephemeralPublicKey': forRecipient.ephemeralPublicKey,
+      'targetPublicKey': forRecipient.targetPublicKey,
+      'forSenderNonce': forSender.nonce,
+      'forSenderEphemeralPublicKey': forSender.ephemeralPublicKey,
+      'forSenderTargetPublicKey': forSender.targetPublicKey,
+    });
+    final data = init['data'] as Map<String, dynamic>;
+    final pendingUploadId = '${data['pendingUploadId']}';
+    await _putAttachmentBytes(pendingUploadId, 'recipient', forRecipient.cipherBytes, filename);
+    await _putAttachmentBytes(pendingUploadId, 'sender', forSender.cipherBytes, filename);
+    final finalized = await post('/attachments/finalize', {'pendingUploadId': pendingUploadId});
+    return finalized['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> uploadGroupAttachment({
+    required String groupId,
+    required String filename,
+    required String mimetype,
+    required SecretBoxSealed sealed,
+  }) async {
+    final init = await post('/attachments/init', {
+      'groupId': groupId,
+      'secretboxNonce': sealed.nonce,
+      'filename': filename,
+      'mimetype': mimetype,
+      'size': sealed.cipherBytes.length,
+    });
+    final data = init['data'] as Map<String, dynamic>;
+    final pendingUploadId = '${data['pendingUploadId']}';
+    await _putAttachmentBytes(pendingUploadId, 'recipient', sealed.cipherBytes, filename);
+    final finalized = await post('/attachments/finalize', {'pendingUploadId': pendingUploadId});
+    return finalized['data'] as Map<String, dynamic>;
+  }
+
+  Future<void> _putAttachmentBytes(
+    String pendingUploadId,
+    String slot,
+    Uint8List bytes,
+    String filename,
+  ) async {
+    final request = http.MultipartRequest(
+      'PUT',
+      _uri('/attachments/pending/$pendingUploadId/bytes', {'slot': slot}),
+    );
+    request.headers.addAll(_headers(json: false));
+    request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    final streamed = await request.send();
+    final res = await http.Response.fromStream(streamed);
+    _decode(res);
+  }
+
+  Future<Uint8List?> downloadAttachmentRaw(String id) async => getBytes('/attachments/$id/raw');
 
   String avatarUrl(String userId) => '${baseUrl.replaceAll(RegExp(r'/$'), '')}/users/$userId/avatar';
 }

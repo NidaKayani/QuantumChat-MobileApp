@@ -5,6 +5,8 @@ import '../state/auth_controller.dart';
 import '../state/chat_controller.dart';
 import '../state/theme_controller.dart';
 import '../widgets/common.dart';
+import '../widgets/stories_rail.dart';
+import '../widgets/theme_scene.dart';
 import 'new_chat_screen.dart';
 import 'settings_screen.dart';
 import 'thread_screen.dart';
@@ -37,7 +39,9 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
   Widget build(BuildContext context) {
     final chat = context.watch<ChatController>();
     final auth = context.watch<AuthController>();
-    final colors = context.watch<ThemeController>().colors;
+    final theme = context.watch<ThemeController>();
+    final colors = theme.colors;
+    final scenic = theme.isFunTheme;
     final filters = chat.incomingRequestCount > 0
         ? [
             ('all', 'All'),
@@ -53,7 +57,12 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
           ];
 
     return Scaffold(
+      backgroundColor: scenic ? Colors.transparent : colors.body,
+      extendBodyBehindAppBar: false,
       appBar: AppBar(
+        backgroundColor: scenic ? colors.surface.withValues(alpha: 0.58) : colors.surface,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
         titleSpacing: 16,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -83,8 +92,11 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
+      body: ThemeScene(
+        themeId: theme.id,
+        intensity: 0.72,
+        child: Column(
+          children: [
           if (auth.user?.emailVerified == false)
             Material(
               color: colors.accentMuted,
@@ -167,6 +179,43 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
               }).toList(),
             ),
           ),
+          const StoriesRail(),
+          if (chat.filter == 'friends' && chat.friendRequests.isNotEmpty)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                  child: Text(
+                    'Friend requests',
+                    style: TextStyle(color: colors.accentCyan, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                ...chat.friendRequests.map(
+                  (r) => ListTile(
+                    leading: UserAvatar(name: r.from.title, userId: r.from.id, hasAvatar: r.from.hasAvatar),
+                    title: Text(r.from.title, style: TextStyle(color: colors.textPrimary)),
+                    subtitle: Text('@${r.from.username}', style: TextStyle(color: colors.textMuted)),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Accept',
+                          onPressed: () => chat.acceptFriendRequest(r.id),
+                          icon: Icon(Icons.check_circle, color: colors.success),
+                        ),
+                        IconButton(
+                          tooltip: 'Decline',
+                          onPressed: () => chat.declineFriendRequest(r.id),
+                          icon: Icon(Icons.cancel, color: colors.error),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Divider(color: colors.border.withValues(alpha: 0.5)),
+              ],
+            ),
           const SizedBox(height: 4),
           Expanded(
             child: chat.loadingInbox && chat.conversations.isEmpty
@@ -188,10 +237,15 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
                           )
                         : ListView.separated(
                             itemCount: chat.conversations.length,
-                            separatorBuilder: (_, __) => Divider(height: 1, color: colors.border.withValues(alpha: 0.6)),
+                            separatorBuilder: (_, __) => Divider(
+                              height: 1,
+                              color: colors.border.withValues(alpha: scenic ? 0.35 : 0.6),
+                            ),
                             itemBuilder: (context, i) {
                               final c = chat.conversations[i];
-                              return ListTile(
+                              return Material(
+                                color: scenic ? colors.surface.withValues(alpha: 0.28) : Colors.transparent,
+                                child: ListTile(
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                                 leading: UserAvatar(
                                   name: c.title,
@@ -233,12 +287,14 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
                                     chat.closeThread();
                                   }
                                 },
+                              ),
                               );
                             },
                           ),
                   ),
           ),
         ],
+      ),
       ),
     );
   }

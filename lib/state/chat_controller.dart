@@ -21,7 +21,11 @@ class ChatController extends ChangeNotifier {
   List<QcGroup> groups = [];
   List<Conversation> conversations = [];
   List<ChatMessage> messages = [];
+  List<FriendRequest> friendRequests = [];
+  List<StoryItem> stories = [];
   Conversation? selected;
+  ChatMessage? replyTo;
+  ChatMessage? editing;
   String filter = 'all';
   String search = '';
   bool loadingInbox = false;
@@ -142,10 +146,86 @@ class ChatController extends ChangeNotifier {
 
   Future<void> _refreshFriendRequests() async {
     try {
-      final incoming = await auth.api.friendRequests();
-      incomingRequestCount = incoming.length;
+      friendRequests = await auth.api.friendRequestsIncoming();
+      incomingRequestCount = friendRequests.length;
       notifyListeners();
     } catch (_) {}
+  }
+
+  Future<void> refreshStories() async {
+    try {
+      stories = await auth.api.listStories();
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> acceptFriendRequest(String id) async {
+    await auth.api.acceptFriendRequest(id);
+    await refreshInbox();
+  }
+
+  Future<void> declineFriendRequest(String id) async {
+    await auth.api.declineFriendRequest(id);
+    await _refreshFriendRequests();
+  }
+
+  Future<void> blockPeer(String userId) async {
+    await auth.api.blockUser(userId);
+    await refreshInbox();
+  }
+
+  Future<void> muteSelected({String duration = 'always'}) async {
+    final conv = selected;
+    if (conv == null) return;
+    if (conv.type == ConversationType.dm) {
+      await auth.api.muteChat(peerId: conv.id, duration: duration);
+    } else {
+      await auth.api.muteChat(groupId: conv.id, duration: duration);
+    }
+    conv.muted = true;
+    notifyListeners();
+  }
+
+  Future<void> unmuteSelected() async {
+    final conv = selected;
+    if (conv == null) return;
+    if (conv.type == ConversationType.dm) {
+      await auth.api.unmuteChat(peerId: conv.id);
+    } else {
+      await auth.api.unmuteChat(groupId: conv.id);
+    }
+    conv.muted = false;
+    notifyListeners();
+  }
+
+  Future<void> clearSelectedChat() async {
+    final conv = selected;
+    if (conv == null) return;
+    if (conv.type == ConversationType.dm) {
+      await auth.api.clearChat(peerId: conv.id);
+    } else {
+      await auth.api.clearChat(groupId: conv.id);
+    }
+    messages = [];
+    notifyListeners();
+  }
+
+  void setReplyTo(ChatMessage? message) {
+    replyTo = message;
+    editing = null;
+    notifyListeners();
+  }
+
+  void setEditing(ChatMessage? message) {
+    editing = message;
+    replyTo = null;
+    notifyListeners();
+  }
+
+  void clearComposerContext() {
+    replyTo = null;
+    editing = null;
+    notifyListeners();
   }
 
   Future<void> refreshInbox() async {
@@ -161,6 +241,7 @@ class ChatController extends ChangeNotifier {
         friends = [];
       }
       await _refreshFriendRequests();
+      await refreshStories();
       _rebuildConversations();
     } on ApiException catch (e) {
       threadError = e.message;
@@ -314,6 +395,7 @@ class ChatController extends ChangeNotifier {
     final from = '${raw['from']}';
     final isMine = from == me.id;
     String? text;
+    Map<String, dynamic>? groupFileMeta;
     if (raw['group'] != null && raw['content'] is String && (raw['content'] as String).isNotEmpty) {
       text = raw['content'] as String;
     } else if (raw['group'] != null && raw['envelopes'] is List) {
@@ -351,6 +433,9 @@ class ChatController extends ChangeNotifier {
           text = obj['body'] as String? ?? text;
         } else if (obj['__qc'] == 1 && obj['type'] == 'text') {
           text = obj['body'] as String? ?? text;
+        } else if (obj['__qc'] == 1 && obj['type'] == 'file') {
+          text = obj['filename'] as String? ?? 'File';
+          groupFileMeta = obj;
         }
       } catch (_) {}
     }
@@ -377,6 +462,41 @@ class ChatController extends ChangeNotifier {
       }
     }
 
+    AttachmentMeta? attachment;
+    final attRaw = raw['attachment'];
+    if (attRaw is Map) {
+      attachment = AttachmentMeta.fromJson(
+        Map<String, dynamic>.from(attRaw),
+        groupKey: groupFileMeta?['key'] as String?,
+        groupNonce: groupFileMeta?['nonce'] as String?,
+      );
+      if (text == null || text.isEmpty) {
+        text = attachment.filename;
+      }
+    } else if (groupFileMeta != null && groupFileMeta['attachmentId'] != null) {
+      attachment = AttachmentMeta(
+        id: '${groupFileMeta['attachmentId']}',
+        filename: groupFileMeta['filename'] as String? ?? 'file',
+        mimetype: groupFileMeta['mimetype'] as String? ?? 'application/octet-stream',
+        size: (groupFileMeta['size'] as num?)?.toInt() ?? 0,
+        encryption: 'secretbox',
+        groupKey: groupFileMeta['key'] as String?,
+        groupNonce: groupFileMeta['nonce'] as String?,
+        secretboxNonce: groupFileMeta['nonce'] as String?,
+      );
+    }
+
+    String? replyToId;
+    String? replyToText;
+    final replyRaw = raw['replyTo'];
+    if (replyRaw is Map) {
+      replyToId = '${replyRaw['id'] ?? replyRaw['_id']}';
+      replyToText = 'Reply';
+    } else if (replyRaw != null) {
+      replyToId = '$replyRaw';
+      replyToText = 'Reply';
+    }
+
     return ChatMessage(
       id: '${raw['id'] ?? raw['_id']}',
       from: from,
@@ -388,7 +508,10 @@ class ChatController extends ChangeNotifier {
       readAt: _parseDate(raw['readAt']),
       editedAt: _parseDate(raw['editedAt']),
       reactions: reactions,
-      kind: raw['kind'] as String? ?? 'text',
+      replyToId: replyToId,
+      replyToText: replyToText,
+      kind: raw['kind'] as String? ?? (attachment != null ? 'file' : 'text'),
+      attachment: attachment,
     );
   }
 
@@ -396,8 +519,15 @@ class ChatController extends ChangeNotifier {
     final conv = selected;
     final text = draft.trim();
     if (conv == null || text.isEmpty || sending) return;
+
+    if (editing != null) {
+      await editMessageText(editing!, text);
+      return;
+    }
+
     sending = true;
     notifyListeners();
+    final replyId = replyTo?.id;
     try {
       if (conv.type == ConversationType.group) {
         final group = conv.group ?? groups.firstWhere((g) => g.id == conv.id);
@@ -407,6 +537,7 @@ class ChatController extends ChangeNotifier {
         } else {
           payload = {'envelopes': await _sealGroupEnvelopes(text, group)};
         }
+        if (replyId != null) payload['replyTo'] = replyId;
         final raw = await auth.api.sendGroupMessage(conv.id, payload);
         final msg = await decorate(raw);
         msg.text = text;
@@ -419,15 +550,18 @@ class ChatController extends ChangeNotifier {
         }
         final forRecipient = sealMessage(text, pickRandom(peer.publicKeys));
         final forSender = sealMessage(text, pickRandom(mySet.map((k) => k.publicKey).toList()));
-        final raw = await auth.api.sendMessage({
+        final payload = <String, dynamic>{
           'to': conv.id,
           'forRecipient': forRecipient.toJson(),
           'forSender': forSender.toJson(),
-        });
+        };
+        if (replyId != null) payload['replyTo'] = replyId;
+        final raw = await auth.api.sendMessage(payload);
         final msg = await decorate(raw);
         msg.text = text;
         messages = [...messages, msg];
       }
+      clearComposerContext();
       await storage.setConversationActivity(
         me.id,
         conv.key,
@@ -441,6 +575,223 @@ class ChatController extends ChangeNotifier {
       sending = false;
       notifyListeners();
     }
+  }
+
+  Future<void> editMessageText(ChatMessage message, String text) async {
+    final conv = selected;
+    if (conv == null || text.trim().isEmpty) return;
+    sending = true;
+    notifyListeners();
+    try {
+      Map<String, dynamic> payload;
+      if (conv.type == ConversationType.group) {
+        final group = conv.group ?? groups.firstWhere((g) => g.id == conv.id);
+        if (group.isPublic) {
+          payload = {'content': text.trim()};
+        } else {
+          payload = {'envelopes': await _sealGroupEnvelopes(text.trim(), group)};
+        }
+      } else {
+        final peer = conv.peer ?? me;
+        final mySet = await storage.getCurrentKeySet(me.id);
+        payload = {
+          'forRecipient': sealMessage(text.trim(), pickRandom(peer.publicKeys)).toJson(),
+          'forSender': sealMessage(text.trim(), pickRandom(mySet.map((k) => k.publicKey).toList())).toJson(),
+        };
+      }
+      final raw = await auth.api.editMessage(message.id, payload);
+      final updated = await decorate(raw);
+      updated.text = text.trim();
+      messages = messages.map((m) => m.id == updated.id ? updated : m).toList();
+      clearComposerContext();
+    } on ApiException catch (e) {
+      threadError = e.message;
+    } finally {
+      sending = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> deleteMessage(ChatMessage message, {bool forEveryone = false}) async {
+    try {
+      await auth.api.deleteMessage(message.id, forEveryone: forEveryone);
+      if (forEveryone) {
+        messages = messages.map((m) {
+          if (m.id != message.id) return m;
+          m.text = 'Message deleted';
+          m.attachment = null;
+          return m;
+        }).toList();
+      } else {
+        messages = messages.where((m) => m.id != message.id).toList();
+      }
+      notifyListeners();
+    } on ApiException catch (e) {
+      threadError = e.message;
+      notifyListeners();
+    }
+  }
+
+  Future<void> sendAttachmentBytes({
+    required Uint8List bytes,
+    required String filename,
+    required String mimetype,
+  }) async {
+    final conv = selected;
+    if (conv == null || sending) return;
+    sending = true;
+    notifyListeners();
+    try {
+      if (conv.type == ConversationType.group) {
+        final group = conv.group ?? groups.firstWhere((g) => g.id == conv.id);
+        final sealed = secretboxSeal(bytes);
+        final uploaded = await auth.api.uploadGroupAttachment(
+          groupId: conv.id,
+          filename: filename,
+          mimetype: mimetype,
+          sealed: sealed,
+        );
+        final plaintext = jsonEncode({
+          '__qc': 1,
+          'type': 'file',
+          'attachmentId': '${uploaded['id']}',
+          'key': sealed.key,
+          'nonce': sealed.nonce,
+          'filename': uploaded['filename'] ?? filename,
+          'mimetype': uploaded['mimetype'] ?? mimetype,
+          'size': uploaded['size'] ?? bytes.length,
+        });
+        final payload = <String, dynamic>{
+          'kind': 'file',
+          'attachmentId': '${uploaded['id']}',
+        };
+        if (group.isPublic) {
+          payload['content'] = plaintext;
+        } else {
+          payload['envelopes'] = await _sealGroupEnvelopes(plaintext, group);
+        }
+        if (replyTo != null) payload['replyTo'] = replyTo!.id;
+        final raw = await auth.api.sendGroupMessage(conv.id, payload);
+        final msg = await decorate(raw);
+        messages = [...messages, msg];
+      } else {
+        final peer = conv.peer ?? me;
+        final mySet = await storage.getCurrentKeySet(me.id);
+        if (mySet.isEmpty || peer.publicKeys.isEmpty) {
+          throw ApiException('Missing encryption keys for this conversation');
+        }
+        final forRecipient = sealFileBytes(bytes, pickRandom(peer.publicKeys));
+        final forSender = sealFileBytes(bytes, pickRandom(mySet.map((k) => k.publicKey).toList()));
+        final uploaded = await auth.api.uploadDmAttachment(
+          recipientId: conv.id,
+          filename: filename,
+          mimetype: mimetype,
+          forRecipient: forRecipient,
+          forSender: forSender,
+        );
+        final emptyRecipient = sealMessage('', pickRandom(peer.publicKeys));
+        final emptySender = sealMessage('', pickRandom(mySet.map((k) => k.publicKey).toList()));
+        final payload = <String, dynamic>{
+          'to': conv.id,
+          'forRecipient': emptyRecipient.toJson(),
+          'forSender': emptySender.toJson(),
+          'attachmentId': '${uploaded['id']}',
+        };
+        if (replyTo != null) payload['replyTo'] = replyTo!.id;
+        final raw = await auth.api.sendMessage(payload);
+        final msg = await decorate(raw);
+        messages = [...messages, msg];
+      }
+      clearComposerContext();
+      await storage.setConversationActivity(
+        me.id,
+        conv.key,
+        at: DateTime.now().toUtc().toIso8601String(),
+        from: me.id,
+      );
+      _rebuildConversations();
+    } on ApiException catch (e) {
+      threadError = e.message;
+    } finally {
+      sending = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> sendGifFromUrl(String url) async {
+    // Implemented in UI via download + sendAttachmentBytes.
+  }
+
+  Future<Uint8List?> decryptAttachment(ChatMessage message) async {
+    final att = message.attachment;
+    if (att == null) return null;
+    final cipher = await auth.api.downloadAttachmentRaw(att.id);
+    if (cipher == null) return null;
+
+    if (att.encryption == 'secretbox' || (att.groupKey != null && att.groupNonce != null)) {
+      final key = att.groupKey;
+      final nonce = att.groupNonce ?? att.secretboxNonce;
+      if (key == null || nonce == null) return null;
+      return secretboxOpen(cipher, nonce, key);
+    }
+
+    final mySet = await storage.getCurrentKeySet(me.id);
+    String? secretKey;
+    String? nonce;
+    String? ephemeral;
+
+    if (att.forSenderTargetPublicKey != null && message.isMine(me.id)) {
+      secretKey = await storage.findSecretKeyForPublicKey(me.id, att.forSenderTargetPublicKey!);
+      nonce = att.forSenderNonce;
+      ephemeral = att.forSenderEphemeralPublicKey;
+    }
+    if (secretKey == null && att.targetPublicKey != null) {
+      secretKey = await storage.findSecretKeyForPublicKey(me.id, att.targetPublicKey!);
+      nonce = att.nonce;
+      ephemeral = att.ephemeralPublicKey;
+    }
+    if (secretKey == null || nonce == null || ephemeral == null) {
+      // Try each local key against sender envelope then recipient envelope
+      for (final k in mySet) {
+        if (att.forSenderTargetPublicKey == k.publicKey) {
+          secretKey = k.secretKey;
+          nonce = att.forSenderNonce;
+          ephemeral = att.forSenderEphemeralPublicKey;
+          break;
+        }
+        if (att.targetPublicKey == k.publicKey) {
+          secretKey = k.secretKey;
+          nonce = att.nonce;
+          ephemeral = att.ephemeralPublicKey;
+          break;
+        }
+      }
+    }
+    if (secretKey == null || nonce == null || ephemeral == null) return null;
+    return unsealFileBytes(cipher, nonce: nonce, ephemeralPublicKey: ephemeral, myPrivateKeyHex: secretKey);
+  }
+
+  Future<void> postStory(Uint8List bytes, {String filename = 'story.jpg', String mimetype = 'image/jpeg'}) async {
+    await auth.api.createStory(bytes: bytes, filename: filename, mimetype: mimetype);
+    await refreshStories();
+  }
+
+  Future<void> refreshGroup(String groupId) async {
+    final g = await auth.api.getGroup(groupId);
+    groups = groups.map((x) => x.id == g.id ? g : x).toList();
+    if (selected?.id == groupId) {
+      selected = Conversation(
+        key: selected!.key,
+        type: ConversationType.group,
+        id: g.id,
+        title: g.name,
+        subtitle: selected!.subtitle,
+        group: g,
+        unread: selected!.unread,
+        sortAt: selected!.sortAt,
+      );
+    }
+    _rebuildConversations();
   }
 
   Future<List<Map<String, dynamic>>> _sealGroupEnvelopes(String plaintext, QcGroup group) async {

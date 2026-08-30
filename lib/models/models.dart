@@ -209,6 +209,145 @@ class Reaction {
   final String? emoji;
 }
 
+class AttachmentMeta {
+  const AttachmentMeta({
+    required this.id,
+    this.filename = 'attachment',
+    this.mimetype = 'application/octet-stream',
+    this.size = 0,
+    this.encryption = 'sealed',
+    this.nonce,
+    this.ephemeralPublicKey,
+    this.targetPublicKey,
+    this.forSenderNonce,
+    this.forSenderEphemeralPublicKey,
+    this.forSenderTargetPublicKey,
+    this.secretboxNonce,
+    this.groupKey,
+    this.groupNonce,
+  });
+
+  final String id;
+  final String filename;
+  final String mimetype;
+  final int size;
+  final String encryption;
+  final String? nonce;
+  final String? ephemeralPublicKey;
+  final String? targetPublicKey;
+  final String? forSenderNonce;
+  final String? forSenderEphemeralPublicKey;
+  final String? forSenderTargetPublicKey;
+  final String? secretboxNonce;
+  /// Distributed via sealed group plaintext for secretbox files.
+  final String? groupKey;
+  final String? groupNonce;
+
+  bool get isImage => mimetype.startsWith('image/');
+  bool get isGif => mimetype == 'image/gif' || filename.toLowerCase().endsWith('.gif');
+
+  factory AttachmentMeta.fromJson(Map<String, dynamic>? json, {String? groupKey, String? groupNonce}) {
+    if (json == null) {
+      throw const FormatException('Missing attachment');
+    }
+    return AttachmentMeta(
+      id: '${json['id'] ?? json['_id']}',
+      filename: json['filename'] as String? ?? 'attachment',
+      mimetype: json['mimetype'] as String? ?? 'application/octet-stream',
+      size: (json['size'] as num?)?.toInt() ?? 0,
+      encryption: json['encryption'] as String? ?? 'sealed',
+      nonce: json['nonce'] as String?,
+      ephemeralPublicKey: json['ephemeralPublicKey'] as String?,
+      targetPublicKey: json['targetPublicKey'] as String?,
+      forSenderNonce: json['forSenderNonce'] as String?,
+      forSenderEphemeralPublicKey: json['forSenderEphemeralPublicKey'] as String?,
+      forSenderTargetPublicKey: json['forSenderTargetPublicKey'] as String?,
+      secretboxNonce: json['secretboxNonce'] as String? ?? groupNonce,
+      groupKey: groupKey,
+      groupNonce: groupNonce ?? json['secretboxNonce'] as String?,
+    );
+  }
+}
+
+class FriendRequest {
+  const FriendRequest({
+    required this.id,
+    required this.from,
+    this.createdAt,
+  });
+
+  final String id;
+  final QcUser from;
+  final DateTime? createdAt;
+
+  factory FriendRequest.fromJson(Map<String, dynamic> json) {
+    final fromRaw = json['from'];
+    final QcUser from;
+    if (fromRaw is Map<String, dynamic>) {
+      from = QcUser.fromJson(fromRaw);
+    } else {
+      from = QcUser(id: '$fromRaw', username: 'user');
+    }
+    return FriendRequest(
+      id: '${json['id'] ?? json['_id']}',
+      from: from,
+      createdAt: json['createdAt'] is String ? DateTime.tryParse(json['createdAt'] as String) : null,
+    );
+  }
+}
+
+class StoryItem {
+  const StoryItem({
+    required this.id,
+    required this.userId,
+    required this.username,
+    this.hasAvatar = false,
+    this.mediaType = 'image',
+    this.mimetype = 'image/jpeg',
+    this.sealed = false,
+    this.createdAt,
+    this.expiresAt,
+    this.viewed = false,
+  });
+
+  final String id;
+  final String userId;
+  final String username;
+  final bool hasAvatar;
+  final String mediaType;
+  final String mimetype;
+  final bool sealed;
+  final DateTime? createdAt;
+  final DateTime? expiresAt;
+  final bool viewed;
+
+  factory StoryItem.fromJson(Map<String, dynamic> json) {
+    final user = json['user'];
+    String userId = '';
+    String username = 'User';
+    bool hasAvatar = false;
+    if (user is Map) {
+      userId = '${user['id'] ?? user['_id'] ?? ''}';
+      username = user['username'] as String? ?? 'User';
+      hasAvatar = user['hasAvatar'] == true;
+    } else if (user != null) {
+      userId = '$user';
+    }
+    return StoryItem(
+      id: '${json['id'] ?? json['_id']}',
+      userId: userId,
+      username: username,
+      hasAvatar: hasAvatar,
+      mediaType: json['mediaType'] as String? ?? 'image',
+      mimetype: json['mimetype'] as String? ?? 'image/jpeg',
+      sealed: json['sealed'] == true,
+      createdAt: json['createdAt'] is String ? DateTime.tryParse(json['createdAt'] as String) : null,
+      expiresAt: json['expiresAt'] is String ? DateTime.tryParse(json['expiresAt'] as String) : null,
+      viewed: json['viewedByMe'] == true || json['viewed'] == true,
+    );
+  }
+}
+
 class ChatMessage {
   ChatMessage({
     required this.id,
@@ -222,8 +361,10 @@ class ChatMessage {
     this.editedAt,
     this.pending = false,
     this.reactions = const [],
+    this.replyToId,
     this.replyToText,
     this.kind = 'text',
+    this.attachment,
   });
 
   final String id;
@@ -234,13 +375,16 @@ class ChatMessage {
   final DateTime? createdAt;
   DateTime? deliveredAt;
   DateTime? readAt;
-  final DateTime? editedAt;
+  DateTime? editedAt;
   final bool pending;
-  final List<Reaction> reactions;
+  List<Reaction> reactions;
+  final String? replyToId;
   final String? replyToText;
   final String kind;
+  AttachmentMeta? attachment;
 
   bool isMine(String myId) => from == myId;
+  bool get hasMedia => attachment != null || kind == 'file' || kind == 'image' || kind == 'gif';
 }
 
 enum ConversationType { dm, group }

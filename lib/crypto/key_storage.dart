@@ -10,6 +10,7 @@ const _userKey = 'qc_user';
 const _sessionIdKey = 'qc_session_id';
 const _apiBaseKey = 'qc_api_base';
 const _themeKey = 'qc_theme';
+const _appIconKey = 'qc_app_icon';
 const _rememberEmailKey = 'qc_remember_email';
 const _keyringPrefix = 'qc_keyring_';
 const _readPrefix = 'qc_read_';
@@ -161,6 +162,9 @@ class KeyStorage {
 
   String? getThemeId() => prefs.getString(_themeKey);
   Future<void> setThemeId(String id) => prefs.setString(_themeKey, id);
+
+  String? getAppIconId() => prefs.getString(_appIconKey);
+  Future<void> setAppIconId(String id) => prefs.setString(_appIconKey, id);
 
   String? getRememberedEmail() => prefs.getString(_rememberEmailKey);
   Future<void> setRememberedEmail(String? email) async {
