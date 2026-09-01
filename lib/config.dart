@@ -7,7 +7,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 /// or from Settings on device.
 class AppConfig {
   static const _defined = String.fromEnvironment('API_URL');
-  static const productionFallback = 'https://quantum-chat-backend.vercel.app';
+  static const productionFallback = 'https://quantum-chat-backend-six.vercel.app';
 
   /// Android emulator reaches the host machine at 10.0.2.2.
   static String get defaultApiBase {
