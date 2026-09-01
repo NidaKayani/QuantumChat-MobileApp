@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -28,9 +30,24 @@ class _ThreadScreenState extends State<ThreadScreen> {
   final searchCtrl = TextEditingController();
   bool searching = false;
   String searchQuery = '';
+  Timer? _liveRefresh;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(context.read<ChatController>().refreshOpenThread());
+    });
+    _liveRefresh = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!mounted) return;
+      unawaited(context.read<ChatController>().refreshOpenThread());
+    });
+  }
 
   @override
   void dispose() {
+    _liveRefresh?.cancel();
     composer.dispose();
     scroll.dispose();
     searchCtrl.dispose();
