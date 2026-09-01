@@ -10,7 +10,10 @@ import '../models/models.dart';
 import 'auth_controller.dart';
 
 class ChatController extends ChangeNotifier {
-  ChatController({required this.auth, required this.storage, required this.socket});
+  ChatController({required this.auth, required this.storage, required this.socket}) {
+    auth.onSocketConnected = _onSocketReady;
+    socket.addConnectListener(_onSocketReady);
+  }
 
   final AuthController auth;
   final KeyStorage storage;
@@ -37,111 +40,145 @@ class ChatController extends ChangeNotifier {
   int incomingRequestCount = 0;
   Timer? _typingDebounce;
   Timer? _pollTimer;
+  Timer? _threadPollTimer;
   String? _joinedGroupId;
   bool _started = false;
+  bool _handlersRegistered = false;
+  String? _lastThreadSyncAt;
 
   QcUser get me => auth.user!;
 
   Future<void> start() async {
-    if (!_started) {
-      _bindSocket();
-      _started = true;
-    }
+    auth.onSocketConnected = _onSocketReady;
+    _ensureSocketHandlers();
+    _started = true;
     await refreshInbox();
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(const Duration(seconds: 12), (_) {
-      if (auth.user == null || !auth.hasLocalKeyring) return;
-      if (socket.connected) return;
-      _pollSync();
+      if (auth.user == null) return;
+      if (!socket.connected) {
+        unawaited(_pollSync());
+      }
+    });
+    _threadPollTimer?.cancel();
+    _threadPollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (auth.user == null || selected == null) return;
+      unawaited(refreshOpenThread());
     });
   }
 
   void stop() {
     _started = false;
     _pollTimer?.cancel();
+    _threadPollTimer?.cancel();
     _typingDebounce?.cancel();
-    socket.off('message:new');
-    socket.off('message:status');
-    socket.off('presence:snapshot');
-    socket.off('presence:update');
-    socket.off('typing:start');
-    socket.off('typing:stop');
-    socket.off('friend:request:new');
-    socket.off('friend:request:accepted');
+    _removeSocketHandlers();
   }
 
-  void _bindSocket() {
-    socket.on('message:new', (raw) async {
-      if (raw is! Map) return;
-      final map = Map<String, dynamic>.from(raw);
-      await _noteActivity(map);
-      final msg = await decorate(map);
-      final inView = selected != null && _messageBelongs(msg, selected!);
-      if (inView) {
-        final exists = messages.any((m) => m.id == msg.id);
-        if (!exists) {
-          messages = [...messages, msg];
-          notifyListeners();
-        }
-        if (!msg.isMine(me.id)) {
-          socket.markDelivered(msg.id);
-          unawaited(auth.api.markRead(selected!.type == ConversationType.dm ? selected!.id : msg.from));
-        }
-      }
-      _rebuildConversations();
-    });
-    socket.on('message:status', (raw) {
-      if (raw is! Map) return;
-      final id = '${raw['id']}';
-      messages = messages.map((m) {
-        if (m.id != id) return m;
-        m.deliveredAt = _parseDate(raw['deliveredAt']) ?? m.deliveredAt;
-        m.readAt = _parseDate(raw['readAt']) ?? m.readAt;
-        return m;
-      }).toList();
+  void _onSocketReady() {
+    if (!_started) return;
+    _rejoinOpenGroup();
+  }
+
+  void _rejoinOpenGroup() {
+    final conv = selected;
+    if (conv?.type != ConversationType.group) return;
+    socket.joinGroup(conv!.id);
+    _joinedGroupId = conv.id;
+  }
+
+  void _ensureSocketHandlers() {
+    if (_handlersRegistered) return;
+    _handlersRegistered = true;
+    socket.on('message:new', _handleMessageNew);
+    socket.on('message:status', _handleMessageStatus);
+    socket.on('presence:snapshot', _handlePresenceSnapshot);
+    socket.on('presence:update', _handlePresenceUpdate);
+    socket.on('typing:start', _handleTypingStart);
+    socket.on('typing:stop', _handleTypingStop);
+    socket.on('friend:request:new', _handleFriendRequestNew);
+    socket.on('friend:request:accepted', _handleFriendRequestAccepted);
+  }
+
+  void _removeSocketHandlers() {
+    if (!_handlersRegistered) return;
+    _handlersRegistered = false;
+    socket.off('message:new', _handleMessageNew);
+    socket.off('message:status', _handleMessageStatus);
+    socket.off('presence:snapshot', _handlePresenceSnapshot);
+    socket.off('presence:update', _handlePresenceUpdate);
+    socket.off('typing:start', _handleTypingStart);
+    socket.off('typing:stop', _handleTypingStop);
+    socket.off('friend:request:new', _handleFriendRequestNew);
+    socket.off('friend:request:accepted', _handleFriendRequestAccepted);
+  }
+
+  Future<void> _handleMessageNew(dynamic raw) async {
+    try {
+      await _ingestRawMessage(raw);
+    } catch (e, st) {
+      debugPrint('message:new handler failed: $e\n$st');
+    }
+  }
+
+  void _handleMessageStatus(dynamic raw) {
+    if (raw is! Map) return;
+    final id = '${raw['id']}';
+    messages = messages.map((m) {
+      if (m.id != id) return m;
+      m.deliveredAt = _parseDate(raw['deliveredAt']) ?? m.deliveredAt;
+      m.readAt = _parseDate(raw['readAt']) ?? m.readAt;
+      return m;
+    }).toList();
+    notifyListeners();
+  }
+
+  void _handlePresenceSnapshot(dynamic raw) {
+    onlineUserIds
+      ..clear()
+      ..addAll(((raw is Map ? raw['onlineUserIds'] : null) as List<dynamic>? ?? []).map((e) => '$e'));
+    _rebuildConversations();
+  }
+
+  void _handlePresenceUpdate(dynamic raw) {
+    if (raw is! Map) return;
+    final id = '${raw['userId']}';
+    if (raw['online'] == true) {
+      onlineUserIds.add(id);
+    } else {
+      onlineUserIds.remove(id);
+    }
+    _rebuildConversations();
+  }
+
+  void _handleTypingStart(dynamic raw) {
+    if (raw is! Map || selected == null) return;
+    final from = _normalizeUserId(raw['from']) ?? '';
+    if (from == me.id) return;
+    final groupId = _normalizeUserId(raw['groupId']);
+    if (selected!.type == ConversationType.group) {
+      if (groupId == selected!.id) typingFrom = from;
+    } else if (from == selected!.id) {
+      typingFrom = from;
+    }
+    notifyListeners();
+  }
+
+  void _handleTypingStop(dynamic raw) {
+    if (raw is! Map) return;
+    final from = _normalizeUserId(raw['from']) ?? '';
+    if (from == typingFrom) {
+      typingFrom = null;
       notifyListeners();
-    });
-    socket.on('presence:snapshot', (raw) {
-      onlineUserIds
-        ..clear()
-        ..addAll(((raw is Map ? raw['onlineUserIds'] : null) as List<dynamic>? ?? []).map((e) => '$e'));
-      _rebuildConversations();
-    });
-    socket.on('presence:update', (raw) {
-      if (raw is! Map) return;
-      final id = '${raw['userId']}';
-      if (raw['online'] == true) {
-        onlineUserIds.add(id);
-      } else {
-        onlineUserIds.remove(id);
-      }
-      _rebuildConversations();
-    });
-    socket.on('typing:start', (raw) {
-      if (raw is! Map || selected == null) return;
-      final from = '${raw['from']}';
-      if (from == me.id) return;
-      final groupId = raw['groupId']?.toString();
-      if (selected!.type == ConversationType.group) {
-        if (groupId == selected!.id) typingFrom = from;
-      } else if (from == selected!.id) {
-        typingFrom = from;
-      }
-      notifyListeners();
-    });
-    socket.on('typing:stop', (raw) {
-      if (raw is! Map) return;
-      if ('${raw['from']}' == typingFrom) {
-        typingFrom = null;
-        notifyListeners();
-      }
-    });
-    socket.on('friend:request:new', (_) {
-      unawaited(_refreshFriendRequests());
-    });
-    socket.on('friend:request:accepted', (_) {
-      unawaited(refreshInbox());
-    });
+    }
+  }
+
+  void _handleFriendRequestNew(dynamic _) {
+    unawaited(_refreshFriendRequests());
+  }
+
+  void _handleFriendRequestAccepted(dynamic _) {
+    unawaited(refreshInbox());
   }
 
   Future<void> _refreshFriendRequests() async {
@@ -347,6 +384,7 @@ class ChatController extends ChangeNotifier {
     selected = conv;
     typingFrom = null;
     messages = [];
+    _lastThreadSyncAt = null;
     loadingThread = true;
     threadError = null;
     notifyListeners();
@@ -371,6 +409,7 @@ class ChatController extends ChangeNotifier {
       for (final m in messages.where((m) => !m.isMine(me.id))) {
         socket.markDelivered(m.id);
       }
+      _lastThreadSyncAt = DateTime.now().toUtc().toIso8601String();
       _rebuildConversations();
     } on ApiException catch (e) {
       threadError = e.message;
@@ -387,12 +426,13 @@ class ChatController extends ChangeNotifier {
     }
     selected = null;
     messages = [];
+    _lastThreadSyncAt = null;
     typingFrom = null;
     notifyListeners();
   }
 
   Future<ChatMessage> decorate(Map<String, dynamic> raw) async {
-    final from = '${raw['from']}';
+    final from = _normalizeUserId(raw['from']) ?? '';
     final isMine = from == me.id;
     String? text;
     Map<String, dynamic>? groupFileMeta;
@@ -500,8 +540,8 @@ class ChatController extends ChangeNotifier {
     return ChatMessage(
       id: '${raw['id'] ?? raw['_id']}',
       from: from,
-      to: raw['to']?.toString(),
-      groupId: raw['group']?.toString(),
+      to: _normalizeUserId(raw['to']),
+      groupId: _normalizeUserId(raw['group']),
       text: text,
       createdAt: _parseDate(raw['createdAt']),
       deliveredAt: _parseDate(raw['deliveredAt']),
@@ -908,12 +948,12 @@ class ChatController extends ChangeNotifier {
   }
 
   Future<void> _noteActivity(Map<String, dynamic> raw) async {
-    final group = raw['group']?.toString();
-    final from = raw['from']?.toString();
-    final to = raw['to']?.toString();
+    final group = _normalizeUserId(raw['group']);
+    final from = _normalizeUserId(raw['from']);
+    final to = _normalizeUserId(raw['to']);
     final at = raw['createdAt'] as String? ?? DateTime.now().toUtc().toIso8601String();
     String key;
-    if (group != null && group.isNotEmpty && group != 'null') {
+    if (group != null && group.isNotEmpty) {
       key = storage.conversationKeyForGroup(group);
     } else {
       final other = from == me.id ? to : from;
@@ -923,11 +963,104 @@ class ChatController extends ChangeNotifier {
     await storage.setConversationActivity(me.id, key, at: at, from: from);
   }
 
-  bool _messageBelongs(ChatMessage msg, Conversation conv) {
+  bool _rawBelongsToConversation(Map<String, dynamic> raw, Conversation conv) {
+    final group = _normalizeUserId(raw['group']);
     if (conv.type == ConversationType.group) {
-      return msg.groupId == conv.id;
+      return group == conv.id;
     }
-    return (msg.from == me.id && msg.to == conv.id) || (msg.from == conv.id && (msg.to == me.id || msg.to == null));
+    if (conv.isSelfChat) {
+      final from = _normalizeUserId(raw['from']);
+      final to = _normalizeUserId(raw['to']);
+      return group == null && from == me.id && (to == null || to == me.id);
+    }
+    final from = _normalizeUserId(raw['from']);
+    final to = _normalizeUserId(raw['to']);
+    final otherId = from == me.id ? to : from;
+    return otherId != null && otherId == conv.id;
+  }
+
+  String _messageId(Map<String, dynamic> raw) {
+    final id = raw['id'] ?? raw['_id'];
+    if (id is Map) {
+      return '${id['_id'] ?? id['id'] ?? id['\$oid'] ?? id}';
+    }
+    return '$id';
+  }
+
+  Map<String, dynamic> _coerceMap(dynamic raw) {
+    if (raw is! Map) return {};
+    return raw.map((key, value) => MapEntry('$key', _coerceValue(value)));
+  }
+
+  dynamic _coerceValue(dynamic value) {
+    if (value is Map) return _coerceMap(value);
+    if (value is List) return value.map(_coerceValue).toList();
+    return value;
+  }
+
+  String? _normalizeUserId(dynamic value) {
+    if (value == null) return null;
+    if (value is Map) {
+      final id = value['_id'] ?? value['id'] ?? value['\$oid'];
+      return id == null ? null : '$id';
+    }
+    final text = '$value';
+    if (text.isEmpty || text == 'null') return null;
+    return text;
+  }
+
+  Future<bool> _ingestRawMessage(dynamic raw) async {
+    if (raw is! Map) return false;
+    final map = _coerceMap(raw);
+    await _noteActivity(map);
+    final conv = selected;
+    final belongsToOpenThread = conv != null && _rawBelongsToConversation(map, conv);
+    if (belongsToOpenThread) {
+      final id = _messageId(map);
+      if (!messages.any((m) => m.id == id)) {
+        final msg = await decorate(map);
+        messages = [...messages, msg];
+        messages.sort((a, b) => (a.createdAt ?? DateTime(0)).compareTo(b.createdAt ?? DateTime(0)));
+        if (!msg.isMine(me.id)) {
+          socket.markDelivered(msg.id);
+          if (conv.type == ConversationType.dm) {
+            unawaited(auth.api.markRead(conv.id));
+          }
+        }
+        notifyListeners();
+      }
+    }
+    _rebuildConversations();
+    return belongsToOpenThread;
+  }
+
+  /// Polls the server for new messages in the currently open chat.
+  Future<void> refreshOpenThread() async {
+    final conv = selected;
+    if (conv == null || loadingThread) return;
+    try {
+      List<Map<String, dynamic>> rows;
+      if (_lastThreadSyncAt != null) {
+        rows = await auth.api.syncMessages(since: _lastThreadSyncAt);
+      } else if (messages.isEmpty) {
+        rows = conv.type == ConversationType.dm
+            ? await auth.api.getConversation(conv.id)
+            : await auth.api.getGroupMessages(conv.id);
+      } else {
+        final anchor = messages.last.createdAt ?? DateTime.now();
+        final since = anchor.subtract(const Duration(seconds: 5)).toUtc().toIso8601String();
+        rows = await auth.api.syncMessages(since: since);
+      }
+
+      for (final row in rows) {
+        final map = _coerceMap(row);
+        if (!_rawBelongsToConversation(map, conv)) continue;
+        await _ingestRawMessage(map);
+      }
+      _lastThreadSyncAt = DateTime.now().toUtc().toIso8601String();
+    } catch (e, st) {
+      debugPrint('refreshOpenThread failed: $e\n$st');
+    }
   }
 
   Future<void> _pollSync() async {
@@ -938,8 +1071,8 @@ class ChatController extends ChangeNotifier {
       }
       _rebuildConversations();
       await _refreshFriendRequests();
-      if (selected != null && rows.isNotEmpty) {
-        await open(selected!);
+      if (selected != null) {
+        await refreshOpenThread();
       }
     } catch (_) {}
   }

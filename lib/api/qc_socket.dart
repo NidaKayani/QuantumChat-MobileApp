@@ -1,14 +1,34 @@
+import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+
+typedef SocketEventHandler = void Function(dynamic data);
 
 class QcSocket {
   io.Socket? _socket;
+  final Map<String, List<SocketEventHandler>> _handlers = {};
+  final List<void Function()> _connectListeners = [];
 
   io.Socket? get socket => _socket;
   bool get connected => _socket?.connected == true;
 
+  /// Fires after every successful connect/reconnect (not after [disconnect]).
+  void addConnectListener(void Function() listener) {
+    if (!_connectListeners.contains(listener)) {
+      _connectListeners.add(listener);
+    }
+  }
+
+  void removeConnectListener(void Function() listener) {
+    _connectListeners.remove(listener);
+  }
+
   void connect({required String url, required String token}) {
     disconnect();
-    if (url.isEmpty) return;
+    if (url.isEmpty) {
+      debugPrint('[QcSocket] skipped connect: empty signal URL');
+      return;
+    }
+    debugPrint('[QcSocket] connecting to $url');
     _socket = io.io(
       url,
       io.OptionBuilder()
@@ -22,14 +42,38 @@ class QcSocket {
           .disableAutoConnect()
           .build(),
     );
+    _socket!.onConnect((_) {
+      debugPrint('[QcSocket] connected');
+      for (final listener in List<void Function()>.from(_connectListeners)) {
+        listener();
+      }
+    });
+    _socket!.onDisconnect((_) => debugPrint('[QcSocket] disconnected'));
+    _socket!.onConnectError((err) => debugPrint('[QcSocket] connect error: $err'));
+    _socket!.onError((err) => debugPrint('[QcSocket] error: $err'));
+    for (final entry in _handlers.entries) {
+      for (final handler in entry.value) {
+        _socket!.on(entry.key, handler);
+      }
+    }
     _socket!.connect();
   }
 
-  void on(String event, void Function(dynamic) handler) {
+  void on(String event, SocketEventHandler handler) {
+    final list = _handlers.putIfAbsent(event, () => []);
+    if (!list.contains(handler)) {
+      list.add(handler);
+    }
     _socket?.on(event, handler);
   }
 
-  void off(String event) {
+  void off(String event, [SocketEventHandler? handler]) {
+    if (handler != null) {
+      _handlers[event]?.remove(handler);
+      _socket?.off(event, handler);
+      return;
+    }
+    _handlers.remove(event);
     _socket?.off(event);
   }
 

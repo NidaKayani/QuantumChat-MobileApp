@@ -23,6 +23,9 @@ class AuthController extends ChangeNotifier {
   String? pending2faTempToken;
   bool pending2faRememberMe = true;
 
+  /// Called whenever the realtime socket is (re)connected so chat can re-bind listeners.
+  VoidCallback? onSocketConnected;
+
   String get apiBase => storage.getApiBase() ?? AppConfig.defaultApiBase;
 
   Future<void> bootstrap() async {
@@ -32,7 +35,6 @@ class AuthController extends ChangeNotifier {
     if (stored != null && token != null) {
       user = QcUser.fromJson(stored);
       await _refreshKeyringFlag();
-      _connectSocket(token);
       try {
         final data = await api.me();
         final fresh = data['user'] as Map<String, dynamic>? ?? data;
@@ -44,9 +46,12 @@ class AuthController extends ChangeNotifier {
       } on ApiException catch (e) {
         if (e.status == 401) {
           await logout();
+        } else {
+          _connectSocket(token);
         }
       } catch (_) {
-        // offline — keep cached session
+        // offline — keep cached session and connect with stored token
+        _connectSocket(token);
       }
     }
     ready = true;
