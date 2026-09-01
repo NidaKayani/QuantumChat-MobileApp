@@ -832,23 +832,49 @@ class ChatController extends ChangeNotifier {
     });
   }
 
-  Future<void> react(ChatMessage message, String emoji) async {
+  Future<bool> react(ChatMessage message, String emoji) async {
     final conv = selected;
-    if (conv == null) return;
+    if (conv == null) return false;
     try {
       final mySet = await storage.getCurrentKeySet(me.id);
+      if (mySet.isEmpty) {
+        threadError = 'Missing encryption keys for reactions';
+        notifyListeners();
+        return false;
+      }
+
       List<String> recipientKeys = [];
       if (conv.type == ConversationType.group) {
-        final group = conv.group;
-        final targetId = message.from == me.id
-            ? group?.members.map((m) => m.id).firstWhere((id) => id != me.id, orElse: () => me.id)
-            : message.from;
-        final member = group?.members.cast<QcUser?>().firstWhere((m) => m?.id == targetId, orElse: () => null);
-        recipientKeys = member?.publicKeys ?? [];
+        final group = conv.group ?? groups.cast<QcGroup?>().firstWhere((g) => g?.id == conv.id, orElse: () => null);
+        if (group == null) return false;
+        // Seal reaction for the message author so they can read it.
+        final authorId = message.from;
+        QcUser? author;
+        for (final m in group.members) {
+          if (m.id == authorId) {
+            author = m;
+            break;
+          }
+        }
+        author ??= users.cast<QcUser?>().firstWhere((u) => u?.id == authorId, orElse: () => null);
+        recipientKeys = author?.publicKeys ?? [];
+        if (recipientKeys.isEmpty && authorId == me.id) {
+          recipientKeys = mySet.map((k) => k.publicKey).toList();
+        }
       } else {
-        recipientKeys = conv.peer?.publicKeys ?? [];
+        final peer = conv.peer ?? users.cast<QcUser?>().firstWhere((u) => u?.id == conv.id, orElse: () => me) ?? me;
+        recipientKeys = peer.publicKeys;
+        if (recipientKeys.isEmpty && conv.isSelfChat) {
+          recipientKeys = mySet.map((k) => k.publicKey).toList();
+        }
       }
-      if (mySet.isEmpty || recipientKeys.isEmpty) return;
+
+      if (recipientKeys.isEmpty) {
+        threadError = 'Missing encryption keys for reactions';
+        notifyListeners();
+        return false;
+      }
+
       final raw = await auth.api.reactToMessage(message.id, {
         'forRecipient': sealMessage(emoji, pickRandom(recipientKeys)).toJson(),
         'forSender': sealMessage(emoji, pickRandom(mySet.map((k) => k.publicKey).toList())).toJson(),
@@ -856,7 +882,16 @@ class ChatController extends ChangeNotifier {
       final updated = await decorate(raw);
       messages = messages.map((m) => m.id == updated.id ? updated : m).toList();
       notifyListeners();
-    } catch (_) {}
+      return true;
+    } on ApiException catch (e) {
+      threadError = e.message;
+      notifyListeners();
+      return false;
+    } catch (e) {
+      threadError = 'Could not add reaction';
+      notifyListeners();
+      return false;
+    }
   }
 
   Future<QcGroup?> createGroup(String name, List<String> memberIds) async {

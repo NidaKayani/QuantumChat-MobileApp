@@ -11,6 +11,7 @@ import '../theme/qc_theme.dart';
 import '../widgets/attachment_bubble.dart';
 import '../widgets/common.dart';
 import '../widgets/gif_picker_sheet.dart';
+import '../widgets/message_actions_sheet.dart';
 import '../widgets/theme_scene.dart';
 import 'group_info_screen.dart';
 
@@ -320,7 +321,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                               colors: colors,
                               scenic: scenic,
                               highlight: searchQuery.isNotEmpty,
-                              onLongPress: () => _messageActions(m),
+                              onOpenActions: () => _messageActions(m),
                             );
                           },
                         ),
@@ -408,67 +409,28 @@ class _ThreadScreenState extends State<ThreadScreen> {
     final chat = context.read<ChatController>();
     final colors = context.read<ThemeController>().colors;
     final mine = message.isMine(chat.me.id);
-    final action = await showModalBottomSheet<String>(
+    final action = await showMessageActionsSheet(
       context: context,
-      backgroundColor: colors.surface,
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: ['👍', '❤️', '😂', '😮', '😢', '🔥']
-                      .map(
-                        (e) => InkWell(
-                          onTap: () => Navigator.pop(ctx, 'react:$e'),
-                          child: Text(e, style: const TextStyle(fontSize: 28)),
-                        ),
-                      )
-                      .toList(),
-                ),
-              ),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.reply),
-                title: const Text('Reply'),
-                onTap: () => Navigator.pop(ctx, 'reply'),
-              ),
-              if (message.text != null)
-                ListTile(
-                  leading: const Icon(Icons.copy),
-                  title: const Text('Copy'),
-                  onTap: () => Navigator.pop(ctx, 'copy'),
-                ),
-              if (mine && message.attachment == null)
-                ListTile(
-                  leading: const Icon(Icons.edit_outlined),
-                  title: const Text('Edit'),
-                  onTap: () => Navigator.pop(ctx, 'edit'),
-                ),
-              if (mine)
-                ListTile(
-                  leading: Icon(Icons.delete_outline, color: colors.error),
-                  title: Text('Delete for everyone', style: TextStyle(color: colors.error)),
-                  onTap: () => Navigator.pop(ctx, 'delete_everyone'),
-                ),
-              ListTile(
-                leading: const Icon(Icons.delete_forever_outlined),
-                title: const Text('Delete for me'),
-                onTap: () => Navigator.pop(ctx, 'delete_me'),
-              ),
-            ],
-          ),
-        );
-      },
+      message: message,
+      colors: colors,
+      mine: mine,
     );
     if (action == null || !mounted) return;
+
     if (action.startsWith('react:')) {
-      await chat.react(message, action.substring(6));
+      final ok = await chat.react(message, action.substring(6));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(ok ? 'Reaction added' : (chat.threadError ?? 'Reaction failed'))),
+        );
+      }
     } else if (action == 'reply') {
       chat.setReplyTo(message);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Replying — type your message below')),
+        );
+      }
     } else if (action == 'copy' && message.text != null) {
       await Clipboard.setData(ClipboardData(text: message.text!));
       if (mounted) {
@@ -478,10 +440,34 @@ class _ThreadScreenState extends State<ThreadScreen> {
       chat.setEditing(message);
       composer.text = message.text ?? '';
       composer.selection = TextSelection.collapsed(offset: composer.text.length);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Editing — change text and send')),
+        );
+      }
     } else if (action == 'delete_everyone') {
-      await chat.deleteMessage(message, forEveryone: true);
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Delete for everyone?'),
+          content: const Text('This removes the message for all participants.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+          ],
+        ),
+      );
+      if (ok == true && mounted) {
+        await chat.deleteMessage(message, forEveryone: true);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Message deleted')));
+        }
+      }
     } else if (action == 'delete_me') {
       await chat.deleteMessage(message, forEveryone: false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Removed from this device')));
+      }
     }
   }
 }
@@ -494,7 +480,7 @@ class _MessageBubble extends StatelessWidget {
     required this.senderName,
     required this.colors,
     required this.scenic,
-    required this.onLongPress,
+    required this.onOpenActions,
     this.highlight = false,
   });
 
@@ -504,121 +490,157 @@ class _MessageBubble extends StatelessWidget {
   final String? senderName;
   final QcColors colors;
   final bool scenic;
-  final VoidCallback onLongPress;
+  final VoidCallback onOpenActions;
   final bool highlight;
 
   @override
   Widget build(BuildContext context) {
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-      child: GestureDetector(
-        onLongPress: onLongPress,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
-          child: Container(
-            margin: const EdgeInsets.symmetric(vertical: 5),
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-            decoration: glassBubbleDecoration(mine: mine, colors: colors, scenic: scenic).copyWith(
-              border: highlight
-                  ? Border.all(color: colors.accentCyan, width: 1.5)
-                  : glassBubbleDecoration(mine: mine, colors: colors, scenic: scenic).border,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                if (showName && senderName != null)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      senderName!,
-                      style: TextStyle(color: colors.accentCyan, fontSize: 12, fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                if (message.replyToText != null)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: 6),
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: colors.overlay.withValues(alpha: 0.25),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border(left: BorderSide(color: colors.accentCyan, width: 3)),
-                      ),
-                      child: Text(
-                        message.replyToText!,
-                        style: TextStyle(color: colors.textMuted, fontSize: 12),
-                      ),
-                    ),
-                  ),
-                if (message.attachment != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: AttachmentBubble(message: message, colors: colors),
-                  ),
-                if (message.text != null && message.attachment == null)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      message.text!,
-                      style: TextStyle(
-                        color: mine ? colors.bubbleMineFg : colors.bubbleTheirsFg,
-                        height: 1.35,
-                      ),
-                    ),
-                  )
-                else if (message.text == null && message.attachment == null)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Unable to decrypt',
-                      style: TextStyle(
-                        color: colors.textMuted,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 4),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (message.editedAt != null)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 4),
-                        child: Text('edited', style: TextStyle(color: colors.textMuted, fontSize: 10)),
-                      ),
-                    if (message.reactions.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: Text(
-                          message.reactions.map((r) => r.emoji).whereType<String>().join(' '),
-                          style: const TextStyle(fontSize: 12),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onOpenActions,
+          onLongPress: onOpenActions,
+          borderRadius: BorderRadius.circular(18),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 5),
+              padding: const EdgeInsets.fromLTRB(12, 8, 8, 6),
+              decoration: glassBubbleDecoration(mine: mine, colors: colors, scenic: scenic).copyWith(
+                border: highlight
+                    ? Border.all(color: colors.accentCyan, width: 1.5)
+                    : glassBubbleDecoration(mine: mine, colors: colors, scenic: scenic).border,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            if (showName && senderName != null)
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  senderName!,
+                                  style: TextStyle(
+                                    color: colors.accentCyan,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            if (message.replyToText != null)
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Container(
+                                  margin: const EdgeInsets.only(bottom: 6),
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: colors.overlay.withValues(alpha: 0.25),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border(left: BorderSide(color: colors.accentCyan, width: 3)),
+                                  ),
+                                  child: Text(
+                                    message.replyToText!,
+                                    style: TextStyle(color: colors.textMuted, fontSize: 12),
+                                  ),
+                                ),
+                              ),
+                            if (message.attachment != null)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: AttachmentBubble(message: message, colors: colors),
+                              ),
+                            if (message.text != null && message.attachment == null)
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  message.text!,
+                                  style: TextStyle(
+                                    color: mine ? colors.bubbleMineFg : colors.bubbleTheirsFg,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              )
+                            else if (message.text == null && message.attachment == null)
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  'Unable to decrypt',
+                                  style: TextStyle(
+                                    color: colors.textMuted,
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
-                    Text(
-                      formatMessageTime(message.createdAt),
-                      style: TextStyle(
-                        color: mine ? colors.bubbleMineFg.withValues(alpha: 0.78) : colors.textMuted,
-                        fontSize: 11,
-                      ),
-                    ),
-                    if (mine) ...[
-                      const SizedBox(width: 4),
-                      Icon(
-                        message.readAt != null
-                            ? Icons.done_all
-                            : message.deliveredAt != null
-                                ? Icons.done_all
-                                : Icons.done,
-                        size: 14,
-                        color: message.readAt != null
-                            ? colors.accentCyan
-                            : colors.bubbleMineFg.withValues(alpha: 0.78),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                        tooltip: 'Message options',
+                        onPressed: onOpenActions,
+                        icon: Icon(Icons.more_vert, size: 18, color: colors.textMuted.withValues(alpha: 0.9)),
                       ),
                     ],
-                  ],
-                ),
-              ],
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (message.editedAt != null)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Text('edited', style: TextStyle(color: colors.textMuted, fontSize: 10)),
+                        ),
+                      if (message.reactions.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: colors.overlay.withValues(alpha: 0.35),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              message.reactions.map((r) => r.emoji).whereType<String>().join(' '),
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                        ),
+                      Text(
+                        formatMessageTime(message.createdAt),
+                        style: TextStyle(
+                          color: mine ? colors.bubbleMineFg.withValues(alpha: 0.78) : colors.textMuted,
+                          fontSize: 11,
+                        ),
+                      ),
+                      if (mine) ...[
+                        const SizedBox(width: 4),
+                        Icon(
+                          message.readAt != null
+                              ? Icons.done_all
+                              : message.deliveredAt != null
+                                  ? Icons.done_all
+                                  : Icons.done,
+                          size: 14,
+                          color: message.readAt != null
+                              ? colors.accentCyan
+                              : colors.bubbleMineFg.withValues(alpha: 0.78),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),
