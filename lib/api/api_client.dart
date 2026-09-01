@@ -169,12 +169,34 @@ class ApiClient {
   }
 
   Future<List<QcUser>> listUsers({String q = '', String? cursor}) async {
-    final query = <String, String>{'limit': '40'};
+    final query = <String, String>{'limit': '100'};
     if (q.isNotEmpty) query['q'] = q;
     if (cursor != null) query['cursor'] = cursor;
     final body = await get('/users', query: query);
     final data = body['data'] as List<dynamic>? ?? [];
     return data.map((e) => QcUser.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// Loads every user page (for inbox) so friends aren't cut off by pagination.
+  Future<List<QcUser>> listAllUsers({String q = ''}) async {
+    final all = <QcUser>[];
+    String? cursor;
+    var guard = 0;
+    while (guard < 50) {
+      guard++;
+      final query = <String, String>{'limit': '100'};
+      if (q.isNotEmpty) query['q'] = q;
+      if (cursor != null) query['cursor'] = cursor;
+      final body = await get('/users', query: query);
+      final data = body['data'] as List<dynamic>? ?? [];
+      all.addAll(data.map((e) => QcUser.fromJson(e as Map<String, dynamic>)));
+      final meta = body['meta'] as Map<String, dynamic>?;
+      final hasMore = meta?['hasMore'] == true;
+      final next = meta?['nextCursor']?.toString();
+      if (!hasMore || next == null || next.isEmpty) break;
+      cursor = next;
+    }
+    return all;
   }
 
   Future<QcUser> getUser(String id) async {

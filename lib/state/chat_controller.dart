@@ -7,6 +7,7 @@ import '../api/qc_socket.dart';
 import '../crypto/key_storage.dart';
 import '../crypto/qc_crypto.dart';
 import '../models/models.dart';
+import '../widgets/avatar_cache.dart';
 import 'auth_controller.dart';
 
 class ChatController extends ChangeNotifier {
@@ -270,12 +271,16 @@ class ChatController extends ChangeNotifier {
     loadingInbox = true;
     notifyListeners();
     try {
-      users = await auth.api.listUsers();
+      users = await auth.api.listAllUsers();
       groups = await auth.api.listGroups();
       try {
         friends = await auth.api.listFriends();
       } catch (_) {
         friends = [];
+      }
+      _mergeFriendProfiles();
+      for (final u in users) {
+        if (u.hasAvatar) AvatarCache.instance.bust(u.id);
       }
       await _refreshFriendRequests();
       await refreshStories();
@@ -287,6 +292,24 @@ class ChatController extends ChangeNotifier {
       loadingInbox = false;
       notifyListeners();
     }
+  }
+
+  void _mergeFriendProfiles() {
+    if (friends.isEmpty) return;
+    final friendById = {for (final f in friends) f.id: f};
+    final merged = users.map((u) {
+      final f = friendById[u.id];
+      if (f == null) return u;
+      return u.copyWith(
+        displayName: f.displayName.isNotEmpty ? f.displayName : u.displayName,
+        hasAvatar: u.hasAvatar || f.hasAvatar,
+      );
+    }).toList();
+    final ids = merged.map((u) => u.id).toSet();
+    for (final f in friends) {
+      if (!ids.contains(f.id)) merged.add(f);
+    }
+    users = merged;
   }
 
   Future<void> searchPeople(String q) async {

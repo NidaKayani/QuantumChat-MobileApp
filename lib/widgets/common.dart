@@ -72,7 +72,19 @@ class _UserAvatarState extends State<UserAvatar> {
       return;
     }
     final id = widget.userId;
-    if (!widget.hasAvatar || id == null || id.isEmpty) {
+    if (id == null || id.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _loadedBytes = null;
+          _loading = false;
+        });
+      }
+      return;
+    }
+
+    // Group photos: only fetch when the server says one exists.
+    // User avatars: always try — hasAvatar from list endpoints can be stale.
+    if (widget.isGroup && !widget.hasAvatar) {
       if (mounted) {
         setState(() {
           _loadedBytes = null;
