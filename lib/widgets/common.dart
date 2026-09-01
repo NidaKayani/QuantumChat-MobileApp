@@ -1,7 +1,12 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../models/models.dart';
+import '../state/auth_controller.dart';
 import '../theme/qc_theme.dart';
+import 'avatar_cache.dart';
 
 const _avatarPalette = [
   Color(0xFF2563EB),
@@ -16,12 +21,13 @@ const _avatarPalette = [
   Color(0xFFCA8A04),
 ];
 
-class UserAvatar extends StatelessWidget {
+class UserAvatar extends StatefulWidget {
   const UserAvatar({
     super.key,
     required this.name,
     this.userId,
     this.hasAvatar = false,
+    this.isGroup = false,
     this.size = 44,
     this.online = false,
     this.imageBytes,
@@ -30,55 +36,130 @@ class UserAvatar extends StatelessWidget {
   final String name;
   final String? userId;
   final bool hasAvatar;
+  final bool isGroup;
   final double size;
   final bool online;
   final ImageProvider? imageBytes;
+
+  @override
+  State<UserAvatar> createState() => _UserAvatarState();
+}
+
+class _UserAvatarState extends State<UserAvatar> {
+  Uint8List? _loadedBytes;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolveImage();
+  }
+
+  @override
+  void didUpdateWidget(covariant UserAvatar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.userId != widget.userId ||
+        oldWidget.hasAvatar != widget.hasAvatar ||
+        oldWidget.isGroup != widget.isGroup ||
+        oldWidget.imageBytes != widget.imageBytes) {
+      _resolveImage();
+    }
+  }
+
+  Future<void> _resolveImage() async {
+    if (widget.imageBytes != null) {
+      if (mounted) setState(() => _loadedBytes = null);
+      return;
+    }
+    final id = widget.userId;
+    if (!widget.hasAvatar || id == null || id.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _loadedBytes = null;
+          _loading = false;
+        });
+      }
+      return;
+    }
+
+    setState(() => _loading = true);
+    try {
+      final api = context.read<AuthController>().api;
+      final bytes = await AvatarCache.instance.load(api, id, isGroup: widget.isGroup);
+      if (!mounted) return;
+      setState(() {
+        _loadedBytes = bytes;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadedBytes = null;
+        _loading = false;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final colors = QcColors.of(
       Theme.of(context).brightness == Brightness.light ? QcThemeId.light : QcThemeId.dark,
     );
-    // Use inherited colors via Theme instead when possible.
-    final idx = (userId ?? name).codeUnits.fold<int>(0, (a, b) => a + b) % _avatarPalette.length;
-    final initials = name.trim().isEmpty
+    final idx = (widget.userId ?? widget.name).codeUnits.fold<int>(0, (a, b) => a + b) % _avatarPalette.length;
+    final initials = widget.name.trim().isEmpty
         ? '?'
-        : name.trim().split(RegExp(r'\s+')).take(2).map((p) => p[0].toUpperCase()).join();
+        : widget.name.trim().split(RegExp(r'\s+')).take(2).map((p) => p[0].toUpperCase()).join();
 
     Widget inner;
-    if (imageBytes != null) {
+    if (widget.imageBytes != null) {
       inner = ClipOval(
-        child: Image(image: imageBytes!, width: size, height: size, fit: BoxFit.cover),
+        child: Image(image: widget.imageBytes!, width: widget.size, height: widget.size, fit: BoxFit.cover),
+      );
+    } else if (_loadedBytes != null) {
+      inner = ClipOval(
+        child: Image.memory(
+          _loadedBytes!,
+          width: widget.size,
+          height: widget.size,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+        ),
       );
     } else {
       inner = CircleAvatar(
-        radius: size / 2,
+        radius: widget.size / 2,
         backgroundColor: _avatarPalette[idx],
-        child: Text(
-          initials,
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w700,
-            fontSize: size * 0.34,
-          ),
-        ),
+        child: _loading
+            ? SizedBox(
+                width: widget.size * 0.35,
+                height: widget.size * 0.35,
+                child: const CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              )
+            : Text(
+                initials,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: widget.size * 0.34,
+                ),
+              ),
       );
     }
 
     return SizedBox(
-      width: size,
-      height: size,
+      width: widget.size,
+      height: widget.size,
       child: Stack(
         clipBehavior: Clip.none,
         children: [
           inner,
-          if (online)
+          if (widget.online)
             Positioned(
               right: 0,
               bottom: 0,
               child: Container(
-                width: size * 0.28,
-                height: size * 0.28,
+                width: widget.size * 0.28,
+                height: widget.size * 0.28,
                 decoration: BoxDecoration(
                   color: const Color(0xFF22C55E),
                   shape: BoxShape.circle,

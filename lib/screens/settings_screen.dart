@@ -8,6 +8,7 @@ import '../state/chat_controller.dart';
 import '../state/theme_controller.dart';
 import '../theme/qc_app_icons.dart';
 import '../theme/qc_theme.dart';
+import '../widgets/avatar_cache.dart';
 import '../widgets/common.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -91,6 +92,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             mime: file.mimeType ?? 'image/jpeg',
           );
       if (!mounted) return;
+      AvatarCache.instance.bust(updated.id);
       context.read<AuthController>().updateUser(updated);
       setState(() => status = 'Avatar updated');
     } on ApiException catch (e) {

@@ -249,6 +249,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                     name: conv.title,
                     userId: conv.id,
                     hasAvatar: conv.peer?.hasAvatar == true || conv.group?.hasPhoto == true,
+                    isGroup: conv.type == ConversationType.group,
                     online: conv.online,
                     size: 36,
                   ),
