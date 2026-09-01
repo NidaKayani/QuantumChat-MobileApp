@@ -132,6 +132,7 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
                             name: g.name,
                             userId: g.id,
                             hasAvatar: g.hasPhoto,
+                            isGroup: true,
                             size: 72,
                           ),
                         ),

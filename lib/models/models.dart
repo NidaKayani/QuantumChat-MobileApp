@@ -90,7 +90,10 @@ class QcUser {
           .map((k) => k.toString().toLowerCase())
           .toList(),
       lastLoginAt: lastLogin,
-      hasAvatar: json['hasAvatar'] == true,
+      hasAvatar: json['hasAvatar'] == true ||
+          (json['avatarPath'] != null &&
+              '${json['avatarPath']}'.isNotEmpty &&
+              '${json['avatarPath']}' != 'null'),
       emailVerified: json['emailVerified'] == true,
       privacy: PrivacySettings.fromJson(json['privacy'] as Map<String, dynamic>?),
       isSystemUser: json['isSystemUser'] == true,

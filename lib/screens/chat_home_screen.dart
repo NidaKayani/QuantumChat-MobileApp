@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/models.dart';
 import '../state/auth_controller.dart';
 import '../state/chat_controller.dart';
 import '../state/theme_controller.dart';
@@ -251,6 +252,7 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
                                   name: c.title,
                                   userId: c.id,
                                   hasAvatar: c.peer?.hasAvatar == true || c.group?.hasPhoto == true,
+                                  isGroup: c.type == ConversationType.group,
                                   online: c.online,
                                   size: 48,
                                 ),
