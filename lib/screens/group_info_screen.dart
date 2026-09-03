@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../state/auth_controller.dart';
 import '../state/chat_controller.dart';
 import '../state/theme_controller.dart';
+import '../widgets/avatar_cache.dart';
 import '../widgets/common.dart';
+import 'user_profile_screen.dart';
 
 class GroupInfoScreen extends StatefulWidget {
   const GroupInfoScreen({super.key, required this.groupId});
@@ -49,6 +52,116 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
     if (g == null) return false;
     return g.admins.map((e) => e.toString()).contains(me.id);
   }
+
+  // ── Edit name / description ──
+
+  Future<void> _editGroupInfo() async {
+    final g = group;
+    if (g == null) return;
+    final colors = context.read<ThemeController>().colors;
+    final nameCtrl = TextEditingController(text: g.name);
+    final descCtrl = TextEditingController(text: g.description);
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: colors.surface,
+        title: Text('Edit group', style: TextStyle(color: colors.textPrimary)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: nameCtrl, decoration: const InputDecoration(hintText: 'Group name')),
+            const SizedBox(height: 10),
+            TextField(controller: descCtrl, maxLines: 3, decoration: const InputDecoration(hintText: 'Description (optional)')),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await context.read<AuthController>().api.updateGroup(widget.groupId, {
+        'name': nameCtrl.text.trim(),
+        'description': descCtrl.text.trim(),
+      });
+      await _load();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
+  // ── Change group photo ──
+
+  Future<void> _changeGroupPhoto() async {
+    final file = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (file == null || !mounted) return;
+    final bytes = await file.readAsBytes();
+    if (!mounted) return;
+    try {
+      await context.read<AuthController>().api.uploadGroupPhoto(
+            widget.groupId,
+            bytes,
+            filename: file.name,
+            mime: file.mimeType ?? 'image/jpeg',
+          );
+      AvatarCache.instance.bust(widget.groupId);
+      await _load();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Group photo updated')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
+  // ── Promote / Demote admin ──
+
+  Future<void> _toggleAdmin(QcUser member, bool isCurrentlyAdmin) async {
+    try {
+      if (isCurrentlyAdmin) {
+        await context.read<AuthController>().api.demoteAdmin(widget.groupId, member.id);
+      } else {
+        await context.read<AuthController>().api.promoteAdmin(widget.groupId, member.id);
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
+  // ── Delete group ──
+
+  Future<void> _deleteGroup() async {
+    final colors = context.read<ThemeController>().colors;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: colors.surface,
+        title: Text('Delete group?', style: TextStyle(color: colors.textPrimary)),
+        content: Text('This will permanently delete the group and all messages.', style: TextStyle(color: colors.textSecondary)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Delete', style: TextStyle(color: colors.error)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await context.read<AuthController>().api.deleteGroup(widget.groupId);
+      if (!mounted) return;
+      context.read<ChatController>().closeThread();
+      Navigator.of(context).popUntil((r) => r.isFirst);
+      await context.read<ChatController>().refreshInbox();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
+  // ── Add / Remove members ──
 
   Future<void> _addMember() async {
     final chat = context.read<ChatController>();
@@ -115,6 +228,7 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
     final colors = context.watch<ThemeController>().colors;
     final me = context.watch<AuthController>().user!;
     final g = group;
+    final admin = _isAdmin(me);
 
     return Scaffold(
       appBar: AppBar(title: Text(g?.name ?? 'Group')),
@@ -128,17 +242,47 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
                       padding: const EdgeInsets.all(16),
                       children: [
                         Center(
-                          child: UserAvatar(
-                            name: g.name,
-                            userId: g.id,
-                            hasAvatar: g.hasPhoto,
-                            isGroup: true,
-                            size: 72,
+                          child: GestureDetector(
+                            onTap: admin ? _changeGroupPhoto : null,
+                            child: Stack(
+                              children: [
+                                UserAvatar(
+                                  name: g.name,
+                                  userId: g.id,
+                                  hasAvatar: g.hasPhoto,
+                                  isGroup: true,
+                                  size: 72,
+                                ),
+                                if (admin)
+                                  Positioned(
+                                    right: 0,
+                                    bottom: 0,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(4),
+                                      decoration: BoxDecoration(color: colors.accent, shape: BoxShape.circle),
+                                      child: const Icon(Icons.camera_alt, size: 14, color: Colors.white),
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
                         const SizedBox(height: 8),
-                        Center(
-                          child: Text(g.name, style: TextStyle(color: colors.textPrimary, fontSize: 20, fontWeight: FontWeight.w800)),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Flexible(
+                              child: Text(g.name, style: TextStyle(color: colors.textPrimary, fontSize: 20, fontWeight: FontWeight.w800)),
+                            ),
+                            if (admin) ...[
+                              const SizedBox(width: 6),
+                              IconButton(
+                                tooltip: 'Edit group',
+                                onPressed: _editGroupInfo,
+                                icon: Icon(Icons.edit, size: 18, color: colors.accentCyan),
+                              ),
+                            ],
+                          ],
                         ),
                         if (g.description.isNotEmpty) ...[
                           const SizedBox(height: 6),
@@ -152,31 +296,47 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
                           ),
                         ),
                         const SizedBox(height: 16),
-                        if (_isAdmin(me))
+                        if (admin)
                           QcPrimaryButton(label: 'Add member', onPressed: _addMember),
                         const SizedBox(height: 16),
                         Text('Members', style: TextStyle(color: colors.accentCyan, fontWeight: FontWeight.w800)),
                         const SizedBox(height: 8),
                         ...g.members.map((m) {
-                          final admin = g.admins.contains(m.id);
+                          final memberIsAdmin = g.admins.contains(m.id);
                           return ListTile(
                             contentPadding: EdgeInsets.zero,
-                            leading: UserAvatar(name: m.title, userId: m.id, hasAvatar: m.hasAvatar),
+                            leading: GestureDetector(
+                              onTap: m.id == me.id ? null : () => Navigator.push(context, MaterialPageRoute(builder: (_) => UserProfileScreen(userId: m.id))),
+                              child: UserAvatar(name: m.title, userId: m.id, hasAvatar: m.hasAvatar),
+                            ),
                             title: Text(m.title, style: TextStyle(color: colors.textPrimary)),
                             subtitle: Text(
-                              admin ? '@${m.username} · admin' : '@${m.username}',
+                              memberIsAdmin ? '@${m.username} · admin' : '@${m.username}',
                               style: TextStyle(color: colors.textMuted),
                             ),
-                            trailing: (m.id == me.id || _isAdmin(me))
-                                ? IconButton(
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (admin && m.id != me.id)
+                                  IconButton(
+                                    tooltip: memberIsAdmin ? 'Remove admin' : 'Make admin',
+                                    onPressed: () => _toggleAdmin(m, memberIsAdmin),
+                                    icon: Icon(
+                                      memberIsAdmin ? Icons.admin_panel_settings : Icons.admin_panel_settings_outlined,
+                                      color: memberIsAdmin ? colors.accentCyan : colors.textMuted,
+                                    ),
+                                  ),
+                                if (m.id == me.id || admin)
+                                  IconButton(
                                     tooltip: m.id == me.id ? 'Leave' : 'Remove',
                                     onPressed: () => _removeMember(m),
                                     icon: Icon(
                                       m.id == me.id ? Icons.logout : Icons.person_remove_outlined,
                                       color: colors.error,
                                     ),
-                                  )
-                                : null,
+                                  ),
+                              ],
+                            ),
                           );
                         }),
                         const SizedBox(height: 24),
@@ -185,6 +345,14 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
                           onPressed: () => _removeMember(me),
                           child: const Text('Leave group'),
                         ),
+                        if (admin) ...[
+                          const SizedBox(height: 12),
+                          OutlinedButton(
+                            style: OutlinedButton.styleFrom(foregroundColor: colors.error, side: BorderSide(color: colors.error)),
+                            onPressed: _deleteGroup,
+                            child: const Text('Delete group'),
+                          ),
+                        ],
                       ],
                     ),
     );

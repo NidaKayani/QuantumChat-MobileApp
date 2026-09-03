@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
+import '../crypto/key_storage.dart';
 import '../models/models.dart';
 import '../state/auth_controller.dart';
 import '../state/chat_controller.dart';
@@ -10,6 +11,10 @@ import '../theme/qc_app_icons.dart';
 import '../theme/qc_theme.dart';
 import '../widgets/avatar_cache.dart';
 import '../widgets/common.dart';
+import 'notification_settings_screen.dart';
+import 'sessions_screen.dart';
+import 'starred_messages_screen.dart';
+import 'wallpaper_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -21,6 +26,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   late final displayName = TextEditingController(text: context.read<AuthController>().user?.displayName ?? '');
   late final bio = TextEditingController(text: context.read<AuthController>().user?.bio ?? '');
+  late final statusText = TextEditingController(text: context.read<AuthController>().user?.statusText ?? '');
   late final apiBase = TextEditingController(text: context.read<AuthController>().apiBase);
   final currentPassword = TextEditingController();
   final newPassword = TextEditingController();
@@ -49,6 +55,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.dispose();
   }
 
+  Future<void> _showLanguagePicker() async {
+    const languages = <(String, String)>[
+      ('en', 'English'),
+      ('ur', 'اردو (Urdu)'),
+      ('ar', 'العربية (Arabic)'),
+      ('tr', 'Türkçe (Turkish)'),
+      ('es', 'Español (Spanish)'),
+      ('fr', 'Français (French)'),
+      ('de', 'Deutsch (German)'),
+      ('hi', 'हिन्दी (Hindi)'),
+      ('zh', '中文 (Chinese)'),
+      ('ru', 'Русский (Russian)'),
+      ('fa', 'فارسی (Persian)'),
+    ];
+    final colors = context.read<ThemeController>().colors;
+    final current = KeyStorage.instance.getLanguage() ?? 'en';
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: colors.surface,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            ListTile(title: Text('Select language', style: TextStyle(color: colors.textPrimary, fontWeight: FontWeight.w800))),
+            ...languages.map(
+              (l) => ListTile(
+                title: Text(l.$2, style: TextStyle(color: colors.textPrimary)),
+                trailing: current == l.$1 ? Icon(Icons.check, color: colors.accent) : null,
+                onTap: () => Navigator.pop(ctx, l.$1),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    final api = context.read<AuthController>().api;
+    try {
+      await KeyStorage.instance.setLanguage(picked);
+      await api.updateLanguage(picked);
+      if (mounted) {
+        setState(() => status = 'Language updated');
+      }
+    } on ApiException catch (e) {
+      if (mounted) setState(() => status = e.message);
+    }
+  }
+
   Future<void> _loadBlocked() async {
     try {
       final list = await context.read<AuthController>().api.listBlocked();
@@ -62,6 +116,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final updated = await auth.api.updateProfile({
         'displayName': displayName.text.trim(),
         'bio': bio.text.trim(),
+        'statusText': statusText.text.trim(),
       });
       auth.updateUser(updated);
       setState(() => status = 'Profile saved');
@@ -202,6 +257,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextField(controller: displayName, decoration: const InputDecoration(hintText: 'Display name')),
           const SizedBox(height: 10),
           TextField(controller: bio, maxLines: 3, decoration: const InputDecoration(hintText: 'Bio')),
+          const SizedBox(height: 10),
+          TextField(controller: statusText, decoration: const InputDecoration(hintText: 'Status (e.g. Available, Busy…)')),
           const SizedBox(height: 10),
           QcPrimaryButton(label: 'Save profile', onPressed: _saveProfile),
           const SizedBox(height: 24),
@@ -373,7 +430,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: const Text('Save API URL'),
           ),
           const SizedBox(height: 24),
+          _Section(title: 'Messages', colors: colors),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.star, color: colors.accentCyan),
+            title: Text('Starred Messages', style: TextStyle(color: colors.textPrimary)),
+            trailing: Icon(Icons.chevron_right, color: colors.textMuted),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const StarredMessagesScreen()),
+              );
+            },
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.notifications_outlined, color: colors.accentCyan),
+            title: Text('Notifications', style: TextStyle(color: colors.textPrimary)),
+            trailing: Icon(Icons.chevron_right, color: colors.textMuted),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotificationSettingsScreen())),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.wallpaper_outlined, color: colors.accentCyan),
+            title: Text('Chat Wallpaper', style: TextStyle(color: colors.textPrimary)),
+            trailing: Icon(Icons.chevron_right, color: colors.textMuted),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const WallpaperScreen())),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.language, color: colors.accentCyan),
+            title: Text('Language', style: TextStyle(color: colors.textPrimary)),
+            trailing: Icon(Icons.chevron_right, color: colors.textMuted),
+            onTap: _showLanguagePicker,
+          ),
+          const SizedBox(height: 24),
           _Section(title: 'Security', colors: colors),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.devices_outlined, color: colors.accentCyan),
+            title: Text('Active Sessions', style: TextStyle(color: colors.textPrimary)),
+            trailing: Icon(Icons.chevron_right, color: colors.textMuted),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SessionsScreen())),
+          ),
           ListTile(
             contentPadding: EdgeInsets.zero,
             title: Text('Encryption keys', style: TextStyle(color: colors.textPrimary)),

@@ -49,6 +49,7 @@ class QcUser {
     this.blockedUsers = const [],
     this.friends = const [],
     this.totpEnabled = false,
+    this.statusText = '',
   });
 
   final String id;
@@ -68,6 +69,7 @@ class QcUser {
   final List<String> blockedUsers;
   final List<String> friends;
   final bool totpEnabled;
+  final String statusText;
 
   String get title => displayName.isNotEmpty ? displayName : username;
 
@@ -102,6 +104,7 @@ class QcUser {
       blockedUsers: (json['blockedUsers'] as List<dynamic>? ?? []).map((e) => '$e').toList(),
       friends: (json['friends'] as List<dynamic>? ?? []).map((e) => '$e').toList(),
       totpEnabled: json['totpEnabled'] == true,
+      statusText: json['statusText'] as String? ?? '',
     );
   }
 
@@ -130,6 +133,7 @@ class QcUser {
         'blockedUsers': blockedUsers,
         'friends': friends,
         'totpEnabled': totpEnabled,
+        'statusText': statusText,
       };
 
   QcUser copyWith({
@@ -139,6 +143,7 @@ class QcUser {
     bool? hasAvatar,
     bool? emailVerified,
     PrivacySettings? privacy,
+    String? statusText,
   }) {
     return QcUser(
       id: id,
@@ -158,6 +163,7 @@ class QcUser {
       blockedUsers: blockedUsers,
       friends: friends,
       totpEnabled: totpEnabled,
+      statusText: statusText ?? this.statusText,
     );
   }
 }
@@ -351,6 +357,26 @@ class StoryItem {
   }
 }
 
+class ForwardedFromMeta {
+  const ForwardedFromMeta({this.messageId, this.username});
+  final String? messageId;
+  final String? username;
+
+  factory ForwardedFromMeta.fromJson(Map<String, dynamic>? json) {
+    if (json == null) return const ForwardedFromMeta();
+    return ForwardedFromMeta(
+      messageId: json['messageId'] as String?,
+      username: json['username'] as String?,
+    );
+  }
+}
+
+class EditHistoryEntry {
+  const EditHistoryEntry({required this.editedAt, this.text});
+  final DateTime editedAt;
+  final String? text;
+}
+
 class ChatMessage {
   ChatMessage({
     required this.id,
@@ -362,12 +388,22 @@ class ChatMessage {
     this.deliveredAt,
     this.readAt,
     this.editedAt,
+    this.expiresAt,
     this.pending = false,
     this.reactions = const [],
     this.replyToId,
     this.replyToText,
     this.kind = 'text',
     this.attachment,
+    this.forwardedFrom,
+    this.isPinned = false,
+    this.isStarred = false,
+    this.editHistory = const [],
+    this.viewOnce = false,
+    this.viewOnceOpenedAt,
+    this.viewOnceOpenedBy,
+    this.viewOnceMediaKind,
+    this.mentionedUserIds = const [],
   });
 
   final String id;
@@ -379,15 +415,26 @@ class ChatMessage {
   DateTime? deliveredAt;
   DateTime? readAt;
   DateTime? editedAt;
+  final DateTime? expiresAt;
   final bool pending;
   List<Reaction> reactions;
   final String? replyToId;
   final String? replyToText;
   final String kind;
   AttachmentMeta? attachment;
+  final ForwardedFromMeta? forwardedFrom;
+  bool isPinned;
+  bool isStarred;
+  List<EditHistoryEntry> editHistory;
+  bool viewOnce;
+  DateTime? viewOnceOpenedAt;
+  String? viewOnceOpenedBy;
+  String? viewOnceMediaKind;
+  final List<String> mentionedUserIds;
 
   bool isMine(String myId) => from == myId;
   bool get hasMedia => attachment != null || kind == 'file' || kind == 'image' || kind == 'gif';
+  bool get isDisappearing => expiresAt != null;
 }
 
 enum ConversationType { dm, group }
@@ -406,6 +453,7 @@ class Conversation {
     this.online = false,
     this.isSelfChat = false,
     this.muted = false,
+    this.archived = false,
   });
 
   final String key;
@@ -420,6 +468,7 @@ class Conversation {
   bool online;
   final bool isSelfChat;
   bool muted;
+  bool archived;
 }
 
 class ApiException implements Exception {

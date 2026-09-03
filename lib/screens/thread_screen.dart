@@ -12,10 +12,19 @@ import '../state/theme_controller.dart';
 import '../theme/qc_theme.dart';
 import '../widgets/attachment_bubble.dart';
 import '../widgets/common.dart';
+import '../widgets/edit_history_sheet.dart';
+import '../widgets/forward_sheet.dart';
+import '../widgets/emoji_picker_sheet.dart';
 import '../widgets/gif_picker_sheet.dart';
+import '../widgets/image_lightbox.dart';
+import '../widgets/mention_overlay.dart';
 import '../widgets/message_actions_sheet.dart';
+import '../widgets/message_info_sheet.dart';
 import '../widgets/theme_scene.dart';
+import '../crypto/key_storage.dart';
 import 'group_info_screen.dart';
+import 'user_profile_screen.dart';
+import 'wallpaper_screen.dart';
 
 class ThreadScreen extends StatefulWidget {
   const ThreadScreen({super.key});
@@ -30,6 +39,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
   final searchCtrl = TextEditingController();
   bool searching = false;
   String searchQuery = '';
+  bool _showEmojiPicker = false;
+  final _composerFocus = FocusNode();
+  final _composerLayerLink = LayerLink();
+  OverlayEntry? _mentionOverlay;
   Timer? _liveRefresh;
 
   @override
@@ -48,10 +61,72 @@ class _ThreadScreenState extends State<ThreadScreen> {
   @override
   void dispose() {
     _liveRefresh?.cancel();
+    _removeMentionOverlay();
     composer.dispose();
     scroll.dispose();
     searchCtrl.dispose();
+    _composerFocus.dispose();
     super.dispose();
+  }
+
+  void _removeMentionOverlay() {
+    _mentionOverlay?.remove();
+    _mentionOverlay = null;
+  }
+
+  void _onComposerChangedWithMentions(String value, ChatController chat) {
+    chat.onComposerChanged(value);
+    final conv = chat.selected;
+    if (conv == null || conv.type != ConversationType.group) {
+      _removeMentionOverlay();
+      return;
+    }
+    final cursor = composer.selection.baseOffset;
+    if (cursor <= 0) {
+      _removeMentionOverlay();
+      return;
+    }
+    final textBefore = value.substring(0, cursor);
+    final atMatch = RegExp(r'@(\w*)$').firstMatch(textBefore);
+    if (atMatch == null) {
+      _removeMentionOverlay();
+      return;
+    }
+    final query = atMatch.group(1)?.toLowerCase() ?? '';
+    final group = conv.group;
+    if (group == null) {
+      _removeMentionOverlay();
+      return;
+    }
+    final members = group.members
+        .where((m) => m.id != chat.me.id)
+        .where((m) =>
+            query.isEmpty ||
+            m.username.toLowerCase().contains(query) ||
+            m.displayName.toLowerCase().contains(query))
+        .toList();
+    if (members.isEmpty) {
+      _removeMentionOverlay();
+      return;
+    }
+    _removeMentionOverlay();
+    final colors = context.read<ThemeController>().colors;
+    _mentionOverlay = OverlayEntry(
+      builder: (ctx) => MentionOverlay(
+        link: _composerLayerLink,
+        members: members,
+        colors: colors,
+        onSelect: (user) {
+          _removeMentionOverlay();
+          final start = atMatch.start;
+          final end = cursor;
+          final replacement = '@${user.username} ';
+          composer.text = value.substring(0, start) + replacement + value.substring(end);
+          composer.selection = TextSelection.collapsed(offset: start + replacement.length);
+        },
+      ),
+    );
+    Overlay.of(context).insert(_mentionOverlay!);
   }
 
   Future<void> _send() async {
@@ -79,10 +154,44 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (file == null || !mounted) return;
     final bytes = await file.readAsBytes();
     if (!mounted) return;
+    final colors = context.read<ThemeController>().colors;
+    bool viewOnce = false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) => AlertDialog(
+            backgroundColor: colors.surface,
+            title: Text('Send photo', style: TextStyle(color: colors.textPrimary)),
+            content: Row(
+              children: [
+                Checkbox(
+                  value: viewOnce,
+                  onChanged: (v) => setLocal(() => viewOnce = v ?? false),
+                  activeColor: colors.accent,
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setLocal(() => viewOnce = !viewOnce),
+                    child: Text('View once 👁', style: TextStyle(color: colors.textPrimary)),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Send')),
+            ],
+          ),
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return;
     await context.read<ChatController>().sendAttachmentBytes(
           bytes: bytes,
           filename: file.name,
           mimetype: file.mimeType ?? 'image/jpeg',
+          viewOnce: viewOnce,
         );
   }
 
@@ -183,6 +292,38 @@ class _ThreadScreenState extends State<ThreadScreen> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.timer_outlined),
+              title: const Text('Disappearing messages'),
+              subtitle: Text(
+                chat.disappearSeconds > 0
+                    ? _disappearLabel(chat.disappearSeconds)
+                    : 'Off',
+                style: TextStyle(color: colors.textMuted, fontSize: 12),
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showDisappearSheet();
+              },
+            ),
+            ListTile(
+              leading: Icon(conv.archived ? Icons.unarchive_outlined : Icons.archive_outlined),
+              title: Text(conv.archived ? 'Unarchive' : 'Archive'),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await chat.toggleArchiveSelected();
+              },
+            ),
+            if (conv.type == ConversationType.dm && !conv.isSelfChat)
+              ListTile(
+                leading: const Icon(Icons.visibility_off_outlined),
+                title: const Text('Hide chat'),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  await chat.hideSelectedChat();
+                  if (mounted) Navigator.pop(context);
+                },
+              ),
+            ListTile(
               leading: const Icon(Icons.delete_sweep_outlined),
               title: const Text('Clear chat'),
               onTap: () async {
@@ -198,6 +339,68 @@ class _ThreadScreenState extends State<ThreadScreen> {
                   Navigator.pop(ctx);
                   await chat.blockPeer(conv.id);
                   if (mounted) Navigator.pop(context);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _disappearLabel(int seconds) {
+    if (seconds <= 0) return 'Off';
+    if (seconds == 3600) return '1 hour';
+    if (seconds == 86400) return '1 day';
+    if (seconds == 604800) return '7 days';
+    if (seconds == 2592000) return '30 days';
+    return '${seconds}s';
+  }
+
+  Future<void> _showDisappearSheet() async {
+    final chat = context.read<ChatController>();
+    final colors = context.read<ThemeController>().colors;
+    const presets = <int>[0, 3600, 86400, 604800, 2592000];
+    const labels = <String>['Off', '1 hour', '1 day', '7 days', '30 days'];
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: colors.surface,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(
+                'Disappearing messages',
+                style: TextStyle(
+                  color: colors.textPrimary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            for (var i = 0; i < presets.length; i++)
+              ListTile(
+                leading: Icon(
+                  presets[i] == 0 ? Icons.timer_off_outlined : Icons.timer_outlined,
+                  color: chat.disappearSeconds == presets[i] ? colors.accent : null,
+                ),
+                title: Text(labels[i]),
+                trailing: chat.disappearSeconds == presets[i]
+                    ? Icon(Icons.check_circle, color: colors.accent)
+                    : null,
+                onTap: () {
+                  chat.setDisappearSeconds(presets[i]);
+                  Navigator.pop(ctx);
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(presets[i] == 0
+                            ? 'Disappearing messages turned off'
+                            : 'Messages will disappear after ${labels[i]}'),
+                      ),
+                    );
+                  }
                 },
               ),
           ],
@@ -224,8 +427,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
       // don't fight user typing mid-edit after first set — only when opening edit
     }
 
+    final wpDeco = wallpaperDecoration(KeyStorage.instance.getWallpaper());
+
     return Scaffold(
-      backgroundColor: scenic ? Colors.transparent : colors.chat,
+      backgroundColor: scenic ? Colors.transparent : (wpDeco != null ? null : colors.chat),
       extendBodyBehindAppBar: scenic,
       appBar: AppBar(
         backgroundColor: scenic ? colors.surface.withValues(alpha: 0.52) : colors.surface,
@@ -245,26 +450,48 @@ class _ThreadScreenState extends State<ThreadScreen> {
               )
             : Row(
                 children: [
-                  UserAvatar(
-                    name: conv.title,
-                    userId: conv.id,
-                    hasAvatar: conv.peer?.hasAvatar == true || conv.group?.hasPhoto == true,
-                    isGroup: conv.type == ConversationType.group,
-                    online: conv.online,
-                    size: 36,
+                  GestureDetector(
+                    onTap: conv.type == ConversationType.dm && !conv.isSelfChat
+                        ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => UserProfileScreen(userId: conv.id)))
+                        : null,
+                    child: UserAvatar(
+                      name: conv.title,
+                      userId: conv.id,
+                      hasAvatar: conv.peer?.hasAvatar == true || conv.group?.hasPhoto == true,
+                      isGroup: conv.type == ConversationType.group,
+                      online: conv.online,
+                      size: 36,
+                    ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(conv.title, overflow: TextOverflow.ellipsis),
+                        Row(
+                          children: [
+                            Flexible(child: Text(conv.title, overflow: TextOverflow.ellipsis)),
+                            if (chat.disappearSeconds > 0) ...[
+                              const SizedBox(width: 6),
+                              Icon(Icons.timer, size: 14, color: colors.accentCyan),
+                              const SizedBox(width: 2),
+                              Text(
+                                _disappearLabel(chat.disappearSeconds),
+                                style: TextStyle(color: colors.accentCyan, fontSize: 11),
+                              ),
+                            ],
+                          ],
+                        ),
                         Text(
                           typingName != null
                               ? '$typingName is typing…'
                               : conv.type == ConversationType.group
                                   ? (conv.subtitle ?? 'Group')
-                                  : (conv.online ? 'online' : formatLastSeen(conv.peer?.lastLoginAt)),
+                                  : (conv.peer?.statusText.isNotEmpty == true
+                                      ? conv.peer!.statusText
+                                      : conv.online
+                                          ? 'online'
+                                          : formatLastSeen(conv.peer?.lastLoginAt)),
                           style: TextStyle(
                             color: typingName != null ? colors.accentCyan : colors.textMuted,
                             fontSize: 12,
@@ -299,7 +526,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
       ),
       body: ThemeScene(
         themeId: theme.id,
-        child: Column(
+        child: Container(
+          decoration: wpDeco,
+          child: Column(
           children: [
             if (scenic) SizedBox(height: MediaQuery.of(context).padding.top + kToolbarHeight),
             if (chat.threadError != null)
@@ -310,6 +539,43 @@ class _ThreadScreenState extends State<ThreadScreen> {
                   child: Text(chat.threadError!, style: TextStyle(color: colors.error)),
                 ),
               ),
+            Builder(builder: (context) {
+              final pinned = visible.where((m) => m.isPinned).toList();
+              if (pinned.isEmpty) return const SizedBox.shrink();
+              final latest = pinned.last;
+              return Material(
+                color: colors.elevated,
+                child: InkWell(
+                  onTap: () {
+                    final idx = visible.indexOf(latest);
+                    if (idx >= 0 && scroll.hasClients) {
+                      scroll.animateTo(
+                        idx * 80.0,
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeOut,
+                      );
+                    }
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(
+                      children: [
+                        Icon(Icons.push_pin, size: 16, color: colors.accentCyan),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            latest.text ?? '📎 Attachment',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: colors.textSecondary, fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }),
             Expanded(
               child: chat.loadingThread
                   ? const Center(child: CircularProgressIndicator())
@@ -331,15 +597,23 @@ class _ThreadScreenState extends State<ThreadScreen> {
                             final m = visible[i];
                             final mine = m.isMine(chat.me.id);
                             final showName = conv.type == ConversationType.group && !mine;
-                            return _MessageBubble(
-                              message: m,
-                              mine: mine,
-                              showName: showName,
-                              senderName: showName ? chat.displayName(m.from) : null,
-                              colors: colors,
-                              scenic: scenic,
-                              highlight: searchQuery.isNotEmpty,
-                              onOpenActions: () => _messageActions(m),
+                            final showDateSep = _shouldShowDateSeparator(visible, i);
+                            return Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (showDateSep)
+                                  _DateSeparator(date: m.createdAt!, colors: colors),
+                                _MessageBubble(
+                                  message: m,
+                                  mine: mine,
+                                  showName: showName,
+                                  senderName: showName ? chat.displayName(m.from) : null,
+                                  colors: colors,
+                                  scenic: scenic,
+                                  highlight: searchQuery.isNotEmpty,
+                                  onOpenActions: () => _messageActions(m),
+                                ),
+                              ],
                             );
                           },
                         ),
@@ -387,17 +661,41 @@ class _ThreadScreenState extends State<ThreadScreen> {
                       onPressed: chat.sending ? null : _attachSheet,
                       icon: Icon(Icons.add_circle_outline, color: colors.accent),
                     ),
+                    IconButton(
+                      onPressed: () {
+                        setState(() {
+                          _showEmojiPicker = !_showEmojiPicker;
+                          if (_showEmojiPicker) {
+                            _composerFocus.unfocus();
+                          } else {
+                            _composerFocus.requestFocus();
+                          }
+                        });
+                      },
+                      icon: Icon(
+                        _showEmojiPicker ? Icons.keyboard_outlined : Icons.emoji_emotions_outlined,
+                        color: colors.accent,
+                      ),
+                    ),
                     Expanded(
-                      child: TextField(
+                      child: CompositedTransformTarget(
+                        link: _composerLayerLink,
+                        child: TextField(
                         controller: composer,
+                        focusNode: _composerFocus,
                         minLines: 1,
                         maxLines: 5,
-                        onChanged: chat.onComposerChanged,
+                        onChanged: (v) => _onComposerChangedWithMentions(v, chat),
                         onSubmitted: (_) => _send(),
+                        onTap: () {
+                          _removeMentionOverlay();
+                          if (_showEmojiPicker) setState(() => _showEmojiPicker = false);
+                        },
                         decoration: InputDecoration(
                           hintText: chat.editing != null ? 'Edit message…' : 'Encrypted message…',
                         ),
                       ),
+                    ),
                     ),
                     const SizedBox(width: 4),
                     CircleAvatar(
@@ -417,21 +715,46 @@ class _ThreadScreenState extends State<ThreadScreen> {
                 ),
               ),
             ),
+            if (_showEmojiPicker)
+              EmojiPickerWidget(
+                colors: colors,
+                onEmojiSelected: (emoji) {
+                  final text = composer.text;
+                  final sel = composer.selection;
+                  final int offset = sel.isValid ? sel.baseOffset : text.length;
+                  final newText = text.substring(0, offset) + emoji + text.substring(offset);
+                  composer.text = newText;
+                  final newOffset = offset + emoji.length;
+                  composer.selection = TextSelection.collapsed(offset: newOffset);
+                },
+              ),
           ],
+        ),
         ),
       ),
     );
+  }
+
+  bool _shouldShowDateSeparator(List<ChatMessage> list, int index) {
+    final current = list[index].createdAt;
+    if (current == null) return false;
+    if (index == 0) return true;
+    final prev = list[index - 1].createdAt;
+    if (prev == null) return true;
+    return current.year != prev.year || current.month != prev.month || current.day != prev.day;
   }
 
   Future<void> _messageActions(ChatMessage message) async {
     final chat = context.read<ChatController>();
     final colors = context.read<ThemeController>().colors;
     final mine = message.isMine(chat.me.id);
+    final isGroup = chat.selected?.type == ConversationType.group;
     final action = await showMessageActionsSheet(
       context: context,
       message: message,
       colors: colors,
       mine: mine,
+      isGroup: isGroup,
     );
     if (action == null || !mounted) return;
 
@@ -486,7 +809,96 @@ class _ThreadScreenState extends State<ThreadScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Removed from this device')));
       }
+    } else if (action == 'info') {
+      if (mounted) showMessageInfoSheet(context: context, message: message, colors: colors);
+    } else if (action == 'edit_history') {
+      if (mounted) {
+        showEditHistorySheet(
+          context: context,
+          message: message,
+          colors: colors,
+          chat: chat,
+        );
+      }
+    } else if (action == 'forward') {
+      if (!mounted) return;
+      final ok = await showForwardSheet(context: context, message: message, colors: colors);
+      if (ok == true && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Message forwarded')),
+        );
+      }
+    } else if (action == 'star') {
+      // TODO: Backend has no star endpoint yet — toggling local state only.
+      message.isStarred = !message.isStarred;
+      chat.notify();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message.isStarred ? 'Message starred' : 'Star removed')),
+        );
+      }
+    } else if (action == 'pin') {
+      final conv = chat.selected;
+      if (conv == null || conv.type != ConversationType.group) return;
+      try {
+        final api = context.read<ChatController>().auth.api;
+        if (message.isPinned) {
+          await api.unpinGroupMessage(conv.id, message.id);
+          message.isPinned = false;
+        } else {
+          await api.pinGroupMessage(conv.id, message.id);
+          message.isPinned = true;
+        }
+        chat.notify();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(message.isPinned ? 'Message pinned' : 'Message unpinned')),
+          );
+        }
+      } on ApiException catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Pin failed: $e')),
+          );
+        }
+      }
     }
+  }
+}
+
+class _DateSeparator extends StatelessWidget {
+  const _DateSeparator({required this.date, required this.colors});
+  final DateTime date;
+  final QcColors colors;
+
+  String _label() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final d = DateTime(date.year, date.month, date.day);
+    if (d == today) return 'Today';
+    if (d == today.subtract(const Duration(days: 1))) return 'Yesterday';
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[date.month - 1]} ${date.day}, ${date.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+          decoration: BoxDecoration(
+            color: colors.overlay.withValues(alpha: 0.45),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            _label(),
+            style: TextStyle(color: colors.textMuted, fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -553,6 +965,24 @@ class _MessageBubble extends StatelessWidget {
                                   ),
                                 ),
                               ),
+                            if (message.forwardedFrom != null)
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(bottom: 4),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.forward, size: 12, color: colors.textMuted),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'Forwarded${message.forwardedFrom!.username != null ? ' from ${message.forwardedFrom!.username}' : ''}',
+                                        style: TextStyle(color: colors.textMuted, fontSize: 11, fontStyle: FontStyle.italic),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
                             if (message.replyToText != null)
                               Align(
                                 alignment: Alignment.centerLeft,
@@ -570,18 +1000,28 @@ class _MessageBubble extends StatelessWidget {
                                   ),
                                 ),
                               ),
-                            if (message.attachment != null)
+                            if (message.attachment != null && !message.viewOnce)
                               Padding(
                                 padding: const EdgeInsets.only(bottom: 6),
                                 child: AttachmentBubble(message: message, colors: colors),
                               ),
+                            if (message.viewOnce)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: _ViewOnceBubble(message: message, colors: colors),
+                              ),
                             if (message.text != null && message.attachment == null)
                               Align(
                                 alignment: Alignment.centerLeft,
-                                child: Text(
-                                  message.text!,
-                                  style: TextStyle(
+                                child: _MentionRichText(
+                                  text: message.text!,
+                                  baseStyle: TextStyle(
                                     color: mine ? colors.bubbleMineFg : colors.bubbleTheirsFg,
+                                    height: 1.35,
+                                  ),
+                                  mentionStyle: TextStyle(
+                                    color: colors.accentCyan,
+                                    fontWeight: FontWeight.w600,
                                     height: 1.35,
                                   ),
                                 ),
@@ -614,6 +1054,21 @@ class _MessageBubble extends StatelessWidget {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (message.isPinned)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Icon(Icons.push_pin, size: 12, color: colors.accentCyan),
+                        ),
+                      if (message.isStarred)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Icon(Icons.star, size: 12, color: colors.accentCyan),
+                        ),
+                      if (message.isDisappearing)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Icon(Icons.timer, size: 12, color: colors.accentCyan),
+                        ),
                       if (message.editedAt != null)
                         Padding(
                           padding: const EdgeInsets.only(right: 4),
@@ -661,6 +1116,107 @@ class _MessageBubble extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Renders text with @mention highlights, matching the web's `MentionText`.
+class _MentionRichText extends StatelessWidget {
+  const _MentionRichText({
+    required this.text,
+    required this.baseStyle,
+    required this.mentionStyle,
+  });
+
+  final String text;
+  final TextStyle baseStyle;
+  final TextStyle mentionStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    final re = RegExp(r'(@[a-zA-Z0-9_.-]{2,32})');
+    final spans = <TextSpan>[];
+    int lastEnd = 0;
+    for (final match in re.allMatches(text)) {
+      if (match.start > lastEnd) {
+        spans.add(TextSpan(text: text.substring(lastEnd, match.start)));
+      }
+      spans.add(TextSpan(text: match.group(0), style: mentionStyle));
+      lastEnd = match.end;
+    }
+    if (lastEnd < text.length) {
+      spans.add(TextSpan(text: text.substring(lastEnd)));
+    }
+    return RichText(text: TextSpan(style: baseStyle, children: spans));
+  }
+}
+
+/// Shows a view-once media placeholder or "opened" state.
+class _ViewOnceBubble extends StatelessWidget {
+  const _ViewOnceBubble({required this.message, required this.colors});
+
+  final ChatMessage message;
+  final QcColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final opened = message.viewOnceOpenedAt != null;
+    final mediaKind = message.viewOnceMediaKind ?? 'photo';
+    final label = opened
+        ? '${mediaKind[0].toUpperCase()}${mediaKind.substring(1)} opened'
+        : 'View once $mediaKind';
+
+    return GestureDetector(
+      onTap: opened
+          ? null
+          : () async {
+              final chat = context.read<ChatController>();
+              final att = message.attachment;
+              if (att != null) {
+                final bytes = await chat.decryptAttachment(message);
+                if (!context.mounted) return;
+                if (bytes != null && att.isImage) {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => ImageLightbox(
+                        bytes: bytes,
+                        filename: att.filename,
+                        timestamp: message.createdAt,
+                        colors: colors,
+                      ),
+                    ),
+                  );
+                }
+              }
+              if (!context.mounted) return;
+              await chat.openViewOnce(message);
+            },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: colors.overlay.withValues(alpha: 0.25),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              opened ? Icons.visibility : Icons.visibility_off,
+              size: 20,
+              color: colors.accentCyan,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: colors.textSecondary,
+                fontStyle: FontStyle.italic,
+                fontSize: 13,
+              ),
+            ),
+          ],
         ),
       ),
     );

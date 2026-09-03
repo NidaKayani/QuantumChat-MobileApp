@@ -37,7 +37,9 @@ class ChatController extends ChangeNotifier {
   bool sending = false;
   String? threadError;
   String? typingFrom;
-  final Set<String> onlineUserIds = {};
+  /// Per-conversation disappearing-message TTL in seconds (0 = off).
+  int disappearSeconds = 0;
+    final Set<String> onlineUserIds = {};
   int incomingRequestCount = 0;
   Timer? _typingDebounce;
   Timer? _pollTimer;
@@ -48,6 +50,9 @@ class ChatController extends ChangeNotifier {
   String? _lastThreadSyncAt;
 
   QcUser get me => auth.user!;
+
+  /// Public notify for external callers (e.g. star/pin toggle from UI).
+  void notify() => notifyListeners();
 
   Future<void> start() async {
     auth.onSocketConnected = _onSocketReady;
@@ -99,6 +104,7 @@ class ChatController extends ChangeNotifier {
     socket.on('typing:stop', _handleTypingStop);
     socket.on('friend:request:new', _handleFriendRequestNew);
     socket.on('friend:request:accepted', _handleFriendRequestAccepted);
+    socket.on('message:view-once-opened', _handleViewOnceOpened);
   }
 
   void _removeSocketHandlers() {
@@ -112,6 +118,7 @@ class ChatController extends ChangeNotifier {
     socket.off('typing:stop', _handleTypingStop);
     socket.off('friend:request:new', _handleFriendRequestNew);
     socket.off('friend:request:accepted', _handleFriendRequestAccepted);
+    socket.off('message:view-once-opened', _handleViewOnceOpened);
   }
 
   Future<void> _handleMessageNew(dynamic raw) async {
@@ -182,6 +189,21 @@ class ChatController extends ChangeNotifier {
     unawaited(refreshInbox());
   }
 
+  void _handleViewOnceOpened(dynamic raw) {
+    if (raw is! Map) return;
+    final id = '${raw['id'] ?? raw['_id']}';
+    messages = messages.map((m) {
+      if (m.id != id) return m;
+      m.viewOnce = true;
+      m.viewOnceOpenedAt = _parseDate(raw['viewOnceOpenedAt']) ?? DateTime.now();
+      m.viewOnceOpenedBy = _normalizeUserId(raw['viewOnceOpenedBy']);
+      m.viewOnceMediaKind = raw['viewOnceMediaKind'] as String? ?? m.viewOnceMediaKind;
+      m.attachment = null;
+      return m;
+    }).toList();
+    notifyListeners();
+  }
+
   Future<void> _refreshFriendRequests() async {
     try {
       friendRequests = await auth.api.friendRequestsIncoming();
@@ -248,6 +270,28 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> toggleArchiveSelected() async {
+    final conv = selected;
+    if (conv == null) return;
+    await storage.toggleArchiveChat(me.id, conv.key);
+    conv.archived = !conv.archived;
+    _rebuildConversations();
+  }
+
+  Future<void> hideSelectedChat() async {
+    final conv = selected;
+    if (conv == null || conv.type != ConversationType.dm || conv.isSelfChat) return;
+    await storage.hideChat(me.id, conv.id);
+    closeThread();
+    _rebuildConversations();
+  }
+
+  Future<QcGroup> joinGroupViaInvite(String code) async {
+    final group = await auth.api.joinViaInvite(code.trim().toLowerCase());
+    await refreshInbox();
+    return group;
+  }
+
   void setReplyTo(ChatMessage? message) {
     replyTo = message;
     editing = null;
@@ -263,6 +307,11 @@ class ChatController extends ChangeNotifier {
   void clearComposerContext() {
     replyTo = null;
     editing = null;
+    notifyListeners();
+  }
+
+  void setDisappearSeconds(int seconds) {
+    disappearSeconds = seconds;
     notifyListeners();
   }
 
@@ -341,6 +390,7 @@ class ChatController extends ChangeNotifier {
       sortAt: storage.getConversationActivity(me.id, storage.conversationKeyForUser(me.id))?.at ?? '',
     );
     self.unread = storage.isUnread(me.id, self.key, self.sortAt.isEmpty ? null : self.sortAt, null);
+    self.archived = storage.isChatArchived(me.id, self.key);
     items.add(self);
 
     for (final u in users) {
@@ -356,6 +406,7 @@ class ChatController extends ChangeNotifier {
         unread: storage.isUnread(me.id, key, activity?.at, activity?.from),
         sortAt: activity?.at ?? u.lastLoginAt?.toIso8601String() ?? '',
         online: onlineUserIds.contains(u.id) && u.privacy.online != 'nobody',
+        archived: storage.isChatArchived(me.id, key),
       ));
     }
     for (final g in groups) {
@@ -373,6 +424,7 @@ class ChatController extends ChangeNotifier {
         group: g,
         unread: storage.isUnread(me.id, key, activity?.at, activity?.from),
         sortAt: activity?.at ?? g.updatedAt?.toIso8601String() ?? '',
+        archived: storage.isChatArchived(me.id, key),
       ));
     }
 
@@ -383,7 +435,16 @@ class ChatController extends ChangeNotifier {
     });
 
     final q = search.trim().toLowerCase();
+    final hidden = storage.getHiddenChatIds(me.id).toSet();
     conversations = items.where((c) {
+      if (c.type == ConversationType.dm && !c.isSelfChat && q.isEmpty && hidden.contains(c.id)) {
+        return false;
+      }
+      if (filter == 'archived') {
+        if (!c.archived) return false;
+      } else if (c.archived) {
+        return false;
+      }
       if (filter == 'groups' && c.type != ConversationType.group) return false;
       if (filter == 'unread' && !c.unread) return false;
       if (filter == 'friends') {
@@ -406,6 +467,7 @@ class ChatController extends ChangeNotifier {
     }
     selected = conv;
     typingFrom = null;
+    disappearSeconds = 0;
     messages = [];
     _lastThreadSyncAt = null;
     loadingThread = true;
@@ -560,6 +622,61 @@ class ChatController extends ChangeNotifier {
       replyToText = 'Reply';
     }
 
+    ForwardedFromMeta? forwardedFrom;
+    final fwdRaw = raw['forwardedFrom'];
+    if (fwdRaw is Map) {
+      forwardedFrom = ForwardedFromMeta.fromJson(Map<String, dynamic>.from(fwdRaw));
+    }
+
+    final editHistory = <EditHistoryEntry>[];
+    final rawHistory = raw['editHistory'] as List<dynamic>?;
+    if (rawHistory != null) {
+      for (final h in rawHistory) {
+        if (h is! Map) continue;
+        final editedAt = _parseDate(h['editedAt']);
+        if (editedAt == null) continue;
+        String? histText;
+        if (h['content'] is String && (h['content'] as String).isNotEmpty) {
+          histText = h['content'] as String;
+        } else if (raw['group'] != null && h['envelopes'] is List) {
+          final envs = (h['envelopes'] as List).whereType<Map>();
+          Map<String, dynamic>? mineEnv;
+          for (final e in envs) {
+            if ('${e['user']}' == me.id) mineEnv = Map<String, dynamic>.from(e);
+          }
+          if (mineEnv != null) {
+            try {
+              final env = SealedEnvelope.fromJson(mineEnv);
+              final sk = await storage.findSecretKeyForPublicKey(me.id, env.targetPublicKey);
+              histText = sk == null ? null : unsealMessage(env, sk);
+            } catch (_) {}
+          }
+        } else {
+          final envJson = isMine ? h['forSender'] : h['forRecipient'];
+          if (envJson is Map) {
+            try {
+              final env = SealedEnvelope.fromJson(Map<String, dynamic>.from(envJson));
+              final sk = await storage.findSecretKeyForPublicKey(me.id, env.targetPublicKey);
+              histText = sk == null ? null : unsealMessage(env, sk);
+            } catch (_) {}
+          }
+        }
+        if (histText != null && histText.trim().startsWith('{')) {
+          try {
+            final obj = jsonDecode(histText) as Map<String, dynamic>;
+            if (obj['__qc'] == 1 && (obj['type'] == 'text' || obj['type'] == 'announcement')) {
+              histText = obj['body'] as String? ?? histText;
+            }
+          } catch (_) {}
+        }
+        editHistory.add(EditHistoryEntry(editedAt: editedAt, text: histText));
+      }
+    }
+
+    final mentionedUserIds = (raw['mentionedUserIds'] as List<dynamic>? ?? [])
+        .map((e) => '$e')
+        .toList();
+
     return ChatMessage(
       id: '${raw['id'] ?? raw['_id']}',
       from: from,
@@ -570,11 +687,19 @@ class ChatController extends ChangeNotifier {
       deliveredAt: _parseDate(raw['deliveredAt']),
       readAt: _parseDate(raw['readAt']),
       editedAt: _parseDate(raw['editedAt']),
+      expiresAt: _parseDate(raw['expiresAt']),
       reactions: reactions,
       replyToId: replyToId,
       replyToText: replyToText,
       kind: raw['kind'] as String? ?? (attachment != null ? 'file' : 'text'),
       attachment: attachment,
+      forwardedFrom: forwardedFrom,
+      editHistory: editHistory,
+      viewOnce: raw['viewOnce'] == true,
+      viewOnceOpenedAt: _parseDate(raw['viewOnceOpenedAt']),
+      viewOnceOpenedBy: _normalizeUserId(raw['viewOnceOpenedBy']),
+      viewOnceMediaKind: raw['viewOnceMediaKind'] as String?,
+      mentionedUserIds: mentionedUserIds,
     );
   }
 
@@ -601,6 +726,22 @@ class ChatController extends ChangeNotifier {
           payload = {'envelopes': await _sealGroupEnvelopes(text, group)};
         }
         if (replyId != null) payload['replyTo'] = replyId;
+        if (disappearSeconds > 0) payload['expiresInSeconds'] = disappearSeconds;
+        // Parse @mentions and resolve to user IDs
+        final mentionRegex = RegExp(r'@(\w+)');
+        final mentionedIds = <String>{};
+        for (final match in mentionRegex.allMatches(text)) {
+          final username = match.group(1)!.toLowerCase();
+          for (final member in group.members) {
+            if (member.username.toLowerCase() == username) {
+              mentionedIds.add(member.id);
+              break;
+            }
+          }
+        }
+        if (mentionedIds.isNotEmpty) {
+          payload['mentionedUserIds'] = mentionedIds.toList();
+        }
         final raw = await auth.api.sendGroupMessage(conv.id, payload);
         final msg = await decorate(raw);
         msg.text = text;
@@ -619,6 +760,7 @@ class ChatController extends ChangeNotifier {
           'forSender': forSender.toJson(),
         };
         if (replyId != null) payload['replyTo'] = replyId;
+        if (disappearSeconds > 0) payload['expiresInSeconds'] = disappearSeconds;
         final raw = await auth.api.sendMessage(payload);
         final msg = await decorate(raw);
         msg.text = text;
@@ -699,6 +841,7 @@ class ChatController extends ChangeNotifier {
     required Uint8List bytes,
     required String filename,
     required String mimetype,
+    bool viewOnce = false,
   }) async {
     final conv = selected;
     if (conv == null || sending) return;
@@ -734,6 +877,7 @@ class ChatController extends ChangeNotifier {
           payload['envelopes'] = await _sealGroupEnvelopes(plaintext, group);
         }
         if (replyTo != null) payload['replyTo'] = replyTo!.id;
+        if (viewOnce) payload['viewOnce'] = true;
         final raw = await auth.api.sendGroupMessage(conv.id, payload);
         final msg = await decorate(raw);
         messages = [...messages, msg];
@@ -761,6 +905,7 @@ class ChatController extends ChangeNotifier {
           'attachmentId': '${uploaded['id']}',
         };
         if (replyTo != null) payload['replyTo'] = replyTo!.id;
+        if (viewOnce) payload['viewOnce'] = true;
         final raw = await auth.api.sendMessage(payload);
         final msg = await decorate(raw);
         messages = [...messages, msg];
@@ -834,6 +979,19 @@ class ChatController extends ChangeNotifier {
     return unsealFileBytes(cipher, nonce: nonce, ephemeralPublicKey: ephemeral, myPrivateKeyHex: secretKey);
   }
 
+  /// Opens a view-once message, fetches the media briefly, then marks it as opened.
+  Future<void> openViewOnce(ChatMessage message) async {
+    try {
+      final raw = await auth.api.openViewOnce(message.id);
+      final updated = await decorate(raw);
+      messages = messages.map((m) => m.id == updated.id ? updated : m).toList();
+      notifyListeners();
+    } on ApiException catch (e) {
+      threadError = e.message;
+      notifyListeners();
+    }
+  }
+
   Future<void> postStory(Uint8List bytes, {String filename = 'story.jpg', String mimetype = 'image/jpeg'}) async {
     await auth.api.createStory(bytes: bytes, filename: filename, mimetype: mimetype);
     await refreshStories();
@@ -856,6 +1014,10 @@ class ChatController extends ChangeNotifier {
     }
     _rebuildConversations();
   }
+
+  /// Public wrapper for sealing group envelopes (used by forward sheet).
+  Future<List<Map<String, dynamic>>> sealGroupEnvelopesPublic(String plaintext, QcGroup group) =>
+      _sealGroupEnvelopes(plaintext, group);
 
   Future<List<Map<String, dynamic>>> _sealGroupEnvelopes(String plaintext, QcGroup group) async {
     final envelopes = <Map<String, dynamic>>[];
@@ -1035,6 +1197,12 @@ class ChatController extends ChangeNotifier {
   Future<bool> _ingestRawMessage(dynamic raw) async {
     if (raw is! Map) return false;
     final map = _coerceMap(raw);
+    final from = _normalizeUserId(map['from']);
+    if (from != null && from != me.id && map['group'] == null) {
+      if (storage.getHiddenChatIds(me.id).contains(from)) {
+        await storage.unhideChat(me.id, from);
+      }
+    }
     await _noteActivity(map);
     final conv = selected;
     final belongsToOpenThread = conv != null && _rawBelongsToConversation(map, conv);

@@ -4,12 +4,13 @@ import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../theme/qc_theme.dart';
 
-/// WhatsApp-style message actions: quick reactions + reply / edit / delete / copy.
+/// WhatsApp-style message actions: quick reactions + reply / edit / delete / copy / forward / pin / star.
 Future<String?> showMessageActionsSheet({
   required BuildContext context,
   required ChatMessage message,
   required QcColors colors,
   required bool mine,
+  bool isGroup = false,
 }) {
   HapticFeedback.mediumImpact();
   return showModalBottomSheet<String>(
@@ -60,6 +61,25 @@ Future<String?> showMessageActionsSheet({
                 colors: colors,
                 onTap: () => Navigator.pop(ctx, 'reply'),
               ),
+              _ActionTile(
+                icon: Icons.forward,
+                label: 'Forward',
+                colors: colors,
+                onTap: () => Navigator.pop(ctx, 'forward'),
+              ),
+              _ActionTile(
+                icon: message.isStarred ? Icons.star : Icons.star_border,
+                label: message.isStarred ? 'Unstar' : 'Star',
+                colors: colors,
+                onTap: () => Navigator.pop(ctx, 'star'),
+              ),
+              if (isGroup)
+                _ActionTile(
+                  icon: Icons.push_pin,
+                  label: message.isPinned ? 'Unpin' : 'Pin',
+                  colors: colors,
+                  onTap: () => Navigator.pop(ctx, 'pin'),
+                ),
               if (message.text != null && message.text!.isNotEmpty)
                 _ActionTile(
                   icon: Icons.copy,
@@ -73,6 +93,19 @@ Future<String?> showMessageActionsSheet({
                   label: 'Edit',
                   colors: colors,
                   onTap: () => Navigator.pop(ctx, 'edit'),
+                ),
+              _ActionTile(
+                icon: Icons.info_outline,
+                label: 'Message info',
+                colors: colors,
+                onTap: () => Navigator.pop(ctx, 'info'),
+              ),
+              if (message.editedAt != null)
+                _ActionTile(
+                  icon: Icons.history,
+                  label: 'Edit history',
+                  colors: colors,
+                  onTap: () => Navigator.pop(ctx, 'edit_history'),
                 ),
               if (mine)
                 _ActionTile(
