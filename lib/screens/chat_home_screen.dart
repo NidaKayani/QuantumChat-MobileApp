@@ -9,8 +9,10 @@ import '../widgets/common.dart';
 import '../widgets/stories_rail.dart';
 import '../widgets/theme_scene.dart';
 import 'new_chat_screen.dart';
+import 'join_group_screen.dart';
 import 'settings_screen.dart';
 import 'thread_screen.dart';
+import 'user_profile_screen.dart';
 
 class ChatHomeScreen extends StatefulWidget {
   const ChatHomeScreen({super.key});
@@ -49,12 +51,14 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
             ('friends', 'Friends'),
             ('unread', 'Unread'),
             ('groups', 'Groups'),
+            ('archived', 'Archived'),
           ]
         : [
             ('all', 'All'),
             ('unread', 'Unread'),
             ('groups', 'Groups'),
             ('friends', 'Friends'),
+            ('archived', 'Archived'),
           ];
 
     return Scaffold(
@@ -80,6 +84,11 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
             tooltip: 'New chat',
             onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NewChatScreen())),
             icon: const Icon(Icons.person_add_alt_1_outlined),
+          ),
+          IconButton(
+            tooltip: 'Join group',
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const JoinGroupScreen())),
+            icon: const Icon(Icons.link),
           ),
           IconButton(
             tooltip: 'New group',
@@ -248,13 +257,18 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
                                 color: scenic ? colors.surface.withValues(alpha: 0.28) : Colors.transparent,
                                 child: ListTile(
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                                leading: UserAvatar(
-                                  name: c.title,
-                                  userId: c.id,
-                                  hasAvatar: c.peer?.hasAvatar == true || c.group?.hasPhoto == true,
-                                  isGroup: c.type == ConversationType.group,
-                                  online: c.online,
-                                  size: 48,
+                                leading: GestureDetector(
+                                  onTap: c.type == ConversationType.dm && !c.isSelfChat
+                                      ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => UserProfileScreen(userId: c.id)))
+                                      : null,
+                                  child: UserAvatar(
+                                    name: c.title,
+                                    userId: c.id,
+                                    hasAvatar: c.peer?.hasAvatar == true || c.group?.hasPhoto == true,
+                                    isGroup: c.type == ConversationType.group,
+                                    online: c.online,
+                                    size: 48,
+                                  ),
                                 ),
                                 title: Text(
                                   c.title,
@@ -264,7 +278,8 @@ class _ChatHomeScreenState extends State<ChatHomeScreen> {
                                   ),
                                 ),
                                 subtitle: Text(
-                                  c.subtitle ??
+                                  (c.peer?.statusText.isNotEmpty == true ? c.peer!.statusText : null) ??
+                                      c.subtitle ??
                                       (c.online
                                           ? 'online'
                                           : formatLastSeen(c.peer?.lastLoginAt, online: c.online)),

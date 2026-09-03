@@ -7,6 +7,7 @@ import '../state/chat_controller.dart';
 import '../state/theme_controller.dart';
 import '../widgets/common.dart';
 import 'thread_screen.dart';
+import 'user_profile_screen.dart';
 
 class NewChatScreen extends StatefulWidget {
   const NewChatScreen({super.key});
@@ -67,10 +68,37 @@ class _NewChatScreenState extends State<NewChatScreen> {
               itemCount: results.length,
               itemBuilder: (context, i) {
                 final u = results[i];
+                final isFriend = chat.friends.any((f) => f.id == u.id);
+                final isMe = u.id == chat.me.id;
                 return ListTile(
-                  leading: UserAvatar(name: u.title, userId: u.id, hasAvatar: u.hasAvatar),
+                  leading: GestureDetector(
+                    onTap: isMe ? null : () => Navigator.push(context, MaterialPageRoute(builder: (_) => UserProfileScreen(userId: u.id))),
+                    child: UserAvatar(name: u.title, userId: u.id, hasAvatar: u.hasAvatar),
+                  ),
                   title: Text(u.title, style: TextStyle(color: colors.textPrimary)),
                   subtitle: Text('@${u.username}', style: TextStyle(color: colors.textMuted)),
+                  trailing: isMe || isFriend
+                      ? null
+                      : IconButton(
+                          tooltip: 'Add friend',
+                          icon: Icon(Icons.person_add, color: colors.accent),
+                          onPressed: () async {
+                            try {
+                              await context.read<AuthController>().api.sendFriendRequest(u.id);
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Friend request sent')),
+                                );
+                              }
+                            } on ApiException catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(e.message)),
+                                );
+                              }
+                            }
+                          },
+                        ),
                   onTap: () async {
                     final conv = Conversation(
                       key: chat.storage.conversationKeyForUser(u.id),

@@ -282,6 +282,8 @@ class ApiClient {
   Future<void> blockUser(String id) async => post('/users/$id/block');
   Future<void> unblockUser(String id) async => delete('/users/$id/block');
 
+  Future<void> removeFriend(String userId) async => delete('/users/$userId/friend');
+
   Future<QcUser> muteChat({String? peerId, String? groupId, String duration = 'always'}) async {
     final body = await post('/users/me/mute', {
       if (peerId != null) 'peerId': peerId,
@@ -476,6 +478,10 @@ class ApiClient {
 
   Future<void> deleteStory(String id) async => delete('/stories/$id');
 
+  Future<void> reactToStory(String id, String emoji) async {
+    await post('/stories/$id/react', {'emoji': emoji});
+  }
+
   /// Init → put bytes → finalize (website-compatible attachment upload).
   Future<Map<String, dynamic>> uploadDmAttachment({
     required String recipientId,
@@ -543,5 +549,115 @@ class ApiClient {
 
   Future<Uint8List?> downloadAttachmentRaw(String id) async => getBytes('/attachments/$id/raw');
 
+  /// Open a view-once message (atomic claim).
+  Future<Map<String, dynamic>> openViewOnce(String messageId) async {
+    final body = await post('/messages/$messageId/view-once');
+    return body['data'] as Map<String, dynamic>;
+  }
+
+  /// Check if a message can be forwarded.
+  Future<Map<String, dynamic>> checkForwardAllowed(String messageId) async {
+    final body = await get('/messages/$messageId/forward-check');
+    return body['data'] as Map<String, dynamic>;
+  }
+
+  /// Pin a message in a group.
+  Future<void> pinGroupMessage(String groupId, String messageId) async {
+    await post('/groups/$groupId/pins/$messageId');
+  }
+
+  /// Unpin a message in a group.
+  Future<void> unpinGroupMessage(String groupId, String messageId) async {
+    await delete('/groups/$groupId/pins/$messageId');
+  }
+
+  // TODO: Backend does not have star/unstar endpoints yet.
+  // These are placeholders for when the backend adds them.
+  // Future<void> starMessage(String messageId) async {
+  //   await post('/messages/$messageId/star');
+  // }
+  // Future<void> unstarMessage(String messageId) async {
+  //   await delete('/messages/$messageId/star');
+  // }
+
+  Future<void> markViewOnceOpened(String messageId) async {
+    await post('/messages/$messageId/view-once');
+  }
+
   String avatarUrl(String userId) => '${baseUrl.replaceAll(RegExp(r'/$'), '')}/users/$userId/avatar';
+
+  // ── Group management ──
+
+  Future<QcGroup> updateGroup(String groupId, Map<String, dynamic> payload) async {
+    final body = await patch('/groups/$groupId', payload);
+    return QcGroup.fromJson(body['data'] as Map<String, dynamic>);
+  }
+
+  Future<QcGroup> uploadGroupPhoto(String groupId, Uint8List bytes, {String filename = 'photo.jpg', String mime = 'image/jpeg'}) async {
+    final request = http.MultipartRequest('POST', _uri('/groups/$groupId/photo'));
+    request.headers.addAll(_headers(json: false));
+    request.files.add(http.MultipartFile.fromBytes('photo', bytes, filename: filename));
+    final streamed = await request.send();
+    final res = await http.Response.fromStream(streamed);
+    final body = _decode(res);
+    return QcGroup.fromJson(body['data'] as Map<String, dynamic>);
+  }
+
+  Future<QcGroup> promoteAdmin(String groupId, String memberId) async {
+    final body = await post('/groups/$groupId/admins/$memberId');
+    return QcGroup.fromJson(body['data'] as Map<String, dynamic>);
+  }
+
+  Future<QcGroup> demoteAdmin(String groupId, String memberId) async {
+    final body = await delete('/groups/$groupId/admins/$memberId');
+    return QcGroup.fromJson(body['data'] as Map<String, dynamic>);
+  }
+
+  // ── Notification settings ──
+
+  Future<Map<String, dynamic>> getNotificationSettings() async {
+    final body = await get('/users/me/notification-settings');
+    return (body['data'] as Map<String, dynamic>?) ?? {};
+  }
+
+  Future<Map<String, dynamic>> updateNotificationSettings(Map<String, dynamic> settings) async {
+    final body = await put('/users/me/notification-settings', settings);
+    return (body['data'] as Map<String, dynamic>?) ?? {};
+  }
+
+  // ── Sessions ──
+
+  Future<List<Map<String, dynamic>>> listSessions() async {
+    final body = await get('/users/me/sessions');
+    return (body['data'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+  }
+
+  Future<void> revokeSession(String sessionId) async {
+    await delete('/users/me/sessions/$sessionId');
+  }
+
+  // ── Language ──
+
+  Future<void> updateLanguage(String languageCode) async {
+    await patch('/users/me/language', {'language': languageCode});
+  }
+
+  // ── Reports ──
+
+  Future<void> reportUser({required String userId, required String reason, String details = ''}) async {
+    await post('/reports', {'userId': userId, 'reason': reason, 'details': details});
+  }
+
+  // ── Group invites ──
+
+  Future<Map<String, dynamic>> previewInvite(String code) async {
+    final body = await get('/groups/invite/${code.trim().toLowerCase()}');
+    return (body['data'] as Map<String, dynamic>?) ?? {};
+  }
+
+  Future<QcGroup> joinViaInvite(String code) async {
+    final normalized = code.trim().toLowerCase();
+    final body = await post('/groups/join/$normalized');
+    return QcGroup.fromJson(body['data'] as Map<String, dynamic>);
+  }
 }

@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../state/chat_controller.dart';
 import '../theme/qc_theme.dart';
+import 'image_lightbox.dart';
 
 class AttachmentBubble extends StatefulWidget {
   const AttachmentBubble({
@@ -70,13 +71,27 @@ class _AttachmentBubbleState extends State<AttachmentBubble> {
       return Text(_error!, style: TextStyle(color: widget.colors.error, fontSize: 12));
     }
     if (_bytes != null && att.isImage) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: Image.memory(
-          _bytes!,
-          width: 220,
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => _FileChip(att: att, colors: widget.colors),
+      return GestureDetector(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ImageLightbox(
+                bytes: _bytes!,
+                filename: att.filename,
+                timestamp: widget.message.createdAt,
+                colors: widget.colors,
+              ),
+            ),
+          );
+        },
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Image.memory(
+            _bytes!,
+            width: 220,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _FileChip(att: att, colors: widget.colors),
+          ),
         ),
       );
     }

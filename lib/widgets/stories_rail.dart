@@ -77,6 +77,9 @@ class StoriesRail extends StatelessWidget {
   Future<void> _openStory(BuildContext context, StoryItem story) async {
     final colors = context.read<ThemeController>().colors;
     final api = context.read<AuthController>().api;
+    final me = context.read<AuthController>().user;
+    final chat = context.read<ChatController>();
+    final isOwn = me != null && story.userId == me.id;
     await showDialog<void>(
       context: context,
       barrierColor: Colors.black87,
@@ -106,9 +109,50 @@ class StoriesRail extends StatelessWidget {
                   ListTile(
                     leading: UserAvatar(name: story.username, userId: story.userId, hasAvatar: story.hasAvatar, size: 36),
                     title: Text(story.username, style: const TextStyle(color: Colors.white)),
-                    trailing: IconButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      icon: const Icon(Icons.close, color: Colors.white),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (isOwn)
+                          IconButton(
+                            tooltip: 'Delete story',
+                            onPressed: () async {
+                              final confirm = await showDialog<bool>(
+                                context: ctx,
+                                builder: (dCtx) => AlertDialog(
+                                  title: const Text('Delete this story?'),
+                                  content: const Text('This story will be removed for everyone.'),
+                                  actions: [
+                                    TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+                                    TextButton(onPressed: () => Navigator.pop(dCtx, true), child: const Text('Delete')),
+                                  ],
+                                ),
+                              );
+                              if (confirm == true && ctx.mounted) {
+                                try {
+                                  await api.deleteStory(story.id);
+                                  await chat.refreshStories();
+                                  if (ctx.mounted) Navigator.pop(ctx);
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Story deleted')),
+                                    );
+                                  }
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('Failed to delete: $e')),
+                                    );
+                                  }
+                                }
+                              }
+                            },
+                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                          ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          icon: const Icon(Icons.close, color: Colors.white),
+                        ),
+                      ],
                     ),
                   ),
                   ConstrainedBox(
@@ -118,7 +162,39 @@ class StoriesRail extends StatelessWidget {
                     ),
                     child: Center(child: body),
                   ),
-                  const SizedBox(height: 12),
+                  if (!isOwn)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: ['👍', '❤️', '😂', '😮', '😢', '🔥'].map((emoji) {
+                          return InkWell(
+                            borderRadius: BorderRadius.circular(20),
+                            onTap: () async {
+                              try {
+                                await api.reactToStory(story.id, emoji);
+                                if (ctx.mounted) {
+                                  ScaffoldMessenger.of(ctx).showSnackBar(
+                                    const SnackBar(content: Text('Reaction sent')),
+                                  );
+                                }
+                              } catch (e) {
+                                if (ctx.mounted) {
+                                  ScaffoldMessenger.of(ctx).showSnackBar(
+                                    SnackBar(content: Text('Reaction failed: $e')),
+                                  );
+                                }
+                              }
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: Text(emoji, style: const TextStyle(fontSize: 28)),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  if (isOwn) const SizedBox(height: 12),
                 ],
               ),
             );

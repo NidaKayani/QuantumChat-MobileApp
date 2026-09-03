@@ -15,6 +15,10 @@ const _rememberEmailKey = 'qc_remember_email';
 const _keyringPrefix = 'qc_keyring_';
 const _readPrefix = 'qc_read_';
 const _activityPrefix = 'qc_activity_';
+const _wallpaperKey = 'qc_wallpaper';
+const _languageKey = 'qc_language';
+const _archivePrefix = 'qc_archived_chats_';
+const _hiddenPrefix = 'qc_hidden_chats_';
 
 class KeyringEntry {
   const KeyringEntry({
@@ -166,6 +170,13 @@ class KeyStorage {
   String? getAppIconId() => prefs.getString(_appIconKey);
   Future<void> setAppIconId(String id) => prefs.setString(_appIconKey, id);
 
+  String? getWallpaper() => prefs.getString(_wallpaperKey);
+  Future<void> setWallpaper(String value) => prefs.setString(_wallpaperKey, value);
+  Future<void> clearWallpaper() => prefs.remove(_wallpaperKey);
+
+  String? getLanguage() => prefs.getString(_languageKey);
+  Future<void> setLanguage(String code) => prefs.setString(_languageKey, code);
+
   String? getRememberedEmail() => prefs.getString(_rememberEmailKey);
   Future<void> setRememberedEmail(String? email) async {
     if (email == null || email.isEmpty) {
@@ -220,5 +231,50 @@ class KeyStorage {
     final lastRead = getLastReadAt(userId, conversationKey);
     if (lastRead == null) return true;
     return activityAt.compareTo(lastRead) > 0;
+  }
+
+  List<String> _readStringList(String prefix, String userId) {
+    final raw = prefs.getString('$prefix$userId');
+    if (raw == null) return [];
+    try {
+      final parsed = jsonDecode(raw) as List<dynamic>;
+      return parsed.map((e) => '$e').toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<List<String>> _writeStringList(String prefix, String userId, List<String> list) async {
+    await prefs.setString('$prefix$userId', jsonEncode(list));
+    return list;
+  }
+
+  List<String> getArchivedChatKeys(String userId) => _readStringList(_archivePrefix, userId);
+
+  bool isChatArchived(String userId, String conversationKey) {
+    return getArchivedChatKeys(userId).contains(conversationKey);
+  }
+
+  Future<List<String>> toggleArchiveChat(String userId, String conversationKey) async {
+    final current = getArchivedChatKeys(userId);
+    if (current.contains(conversationKey)) {
+      return _writeStringList(_archivePrefix, userId, current.where((k) => k != conversationKey).toList());
+    }
+    return _writeStringList(_archivePrefix, userId, [...current, conversationKey]);
+  }
+
+  List<String> getHiddenChatIds(String userId) => _readStringList(_hiddenPrefix, userId);
+
+  Future<List<String>> hideChat(String userId, String peerId) async {
+    final next = {...getHiddenChatIds(userId), peerId};
+    return _writeStringList(_hiddenPrefix, userId, next.toList());
+  }
+
+  Future<List<String>> unhideChat(String userId, String peerId) async {
+    return _writeStringList(
+      _hiddenPrefix,
+      userId,
+      getHiddenChatIds(userId).where((id) => id != peerId).toList(),
+    );
   }
 }
