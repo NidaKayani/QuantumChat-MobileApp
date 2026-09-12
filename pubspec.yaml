@@ -37,6 +37,7 @@ dependencies:
   permission_handler: ^11.3.1
   path: ^1.9.0
   url_launcher: ^6.3.2
+  qr_flutter: ^4.1.0
 
 # path_provider_android 2.3.x pulls JNI/NDK. This machine has no NDK installed.
 dependency_overrides:
